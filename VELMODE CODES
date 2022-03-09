@@ -1,0 +1,3622 @@
+!----------------------------------------------------
+!
+! PROGRAM NAME: VELMODE
+! CODED BY: OSAGIE ABEL UYIMWEN 
+!           (ABEL.OSAGIE@UNIABUJA.EDU.NG, +2348122100528, MARCH 2019)
+! LAST UPDATE :  07/03/2022
+!
+! INCLUDE "A_PARAM_MALAY.INC" FILE FOR USEFUL PARAMETERS AND DESCRIPTION
+!
+! PURPOSE:
+! 
+! (1) TO COMPUTE IN 1D/3D MEDIA (WITH CONSTANT OR LINEARLY VARYING VELOCITY FUNCTIONS):
+!     (a) FIRST-ARRIVAL TRAVEL TIMES 
+!     (b) ARRIVAL TIMES FROM MULTIPLE HORIZONTAL BOUNDARIES (OPTIONAL, JPATH2=1)
+!     (c) RAY PATH OF FIRST ARRIVAL PHASES
+!     (d) RAY PATH FROM MULTIPLE HORIZONTAL BOUNDARIES (OPTIONAL, JPATH2=1)
+! (2) TO RELOCATE EARTHQUAKES (OPTIONAL, JHYPO=1)
+! (3) TO PERFORM TRAVEL TIME RESIDUAL ANALYSIS AT FOUR QUADRANT (AZIMUTHAL ANGLES) FROM STATION
+! (4) TO GENERATE AND PERFORM CHECKERBOARD RESOLUTION TEST (OPTIONAL, JPTB=1)                  
+! (5) TO PERFORM 3D VELOCITY INVERSION
+!
+! SUBROUTINES:
+! 
+! STN_VEL     : TO READ BOTH STATION LOCATION AND 1D VELOCITY MODELS
+! GRID        : TO CREATE MODEL PARAMETERS 
+! INPUT_BISC  : TO READ ARRIVAL TIME DATASET (ISC FORMAT) TO "A_DATA_PRE"
+! INPUT_SFILE : TO READ SFILE (SEISAN FORMAT) TO "A_DATA_PRE"
+! INPUT_PRE   : TO READ "A_DATA_PRE" TO "A_DATA1"
+! ALOCATE     : READ EVENTS AND STATION ARRIVAL TIMES LINES INTO CARRIERS
+! RELOCATE    : RELOCATE EVENTS INTO "A_DATA2"
+! FORWARD     :(a) READ EVENTS AND STATION ARRIVAL TIMES (VELMODE DEFAULT INPUT FILE)
+!              (b) CALCULATE TRAVELTIMES (AND RAYPATHS IF REQUIRED)
+!              (c) CALCULATE TRAVELTIME DERIVATIVES
+!               CALLS SUBROUTINE: SLAY,STN_CORD,DAZXY,TRAVT & DERIVATIVES
+! TRAVT       : FIRST ARRIVAL RAYPATHS,TRAVELTIMES AND PHASE FOR DIRECT/REFRACTED RAYS
+!               CALLS SUBROUTINE: 
+!               (a) TRAYD- CALCULATE RAYPATH AND TRAVELTIMES FOR UPWARD GOING RAYS
+!               (b) TRAYR- CALCULATE RAYPATH AND TRAVELTIMES FOR REFRACTED RAYS
+! DERIVATIVES : TO CALCULATE TRAVELTIME DERIVATIVES
+! VEL1D       : TO GET 1D VELOCITY
+! VEL3D       : TO OBTAIN VELOCITY AT A POINT FROM INTERPOLATING 
+!               THE 8 VERTECES (WITH KNOWN VELOCITIES) AROUND THE POINT 
+! AZI_RES     : TO PERFORM RESIDUAL ANALYSIS AT FOUR AZIMUTHAL ANGLES FROM STATION
+! INVERSION   : TO PERFORM TOMOGRAPHIC INVERSION 
+!               CALLS SUBROUTINE: LSQR (PAIGE & SAUNDERS,1982) 
+!               CALLS SUBROUTINE: NORMALIZE,APROD
+! CHKBOARD    : TO GENERATE A CHECKERBOARD 3D MODEL
+!               CALLS SUBROUTINE: (a)GROUP
+!                                 (b)CKB, CALLS SUBROUTINE: BOARD
+! CORD        : RETURNS LAT & LON OF A POINT Q WHEN 
+!               THE LAT,LON & AZIMUTH OF ANOTHER POINT P IS GIVEN
+! DAZXY       : RETURNS EPICENTRAL & HYPOCENTRAL DISTANCES, AZIMUTH & CARTESIAN COORDINATES
+! LIMIT       : TO ENSURE THAT THE VALUE IS WITHIN SPECIFIED LIMITS
+! PHASE       : TO CONVERT PHASE ID LETTERS -> NUMBERS  P/S 
+! PTUB        : PERFORMS PERTURBATION ON VEL MODEL AND GETS TRAVEL-TIME
+!               BY CALLING VEL3D WITH PTB IDENTIFIER
+! RAND_ERR    : RETURNS THE RANDOM ERROR(S) GIVEN THE STANDARD
+!               DEVIATION (ERR) AND AZIMUTH (AZM,RADIANS)
+! SLAY        : TO GET SOURCE LAYER NUMBER
+! STN_CORD    : TO GET CORDINATES OF STATION WITH ARRIVAL TIME
+! WAVE_TYPE   : TO CONVERT P/S PAHASE FROM 1 & 2 TO PPHASE NUMBERS
+! WTHYP       : CALLED BY THE SUBROUTINE "RELOCATE"
+! LINER       : CALLED BY THE SUBROUTINE "RELOCATE"
+!                  
+
+      PROGRAM VELMODE
+      INCLUDE "A_PARAM_MALAY.INC"
+C      
+!     ----------- INPUT ---------------
+      OPEN(1,FILE='STN_GLOBAL')                ! STATION LIST
+      OPEN(2,FILE='VEL_MODELS')                ! 1D VELOCITY MODEL
+C     OPEN(3,FILE="DATA")                      ! ARRIVAL TIME DATASET
+
+!     ----------- OUTPUT/INPUT --------------   
+C     OPEN(3,FILE="A_INPUT")                   ! EVENTS AND STATION ARRIVAL TIMES
+C                                                EXTRACTED FROM: ISC, SFILE (SEISAN), IRIS(JWEED), ECT                   
+!     ----------- OUTPUT --------------
+      OPEN(10,FILE="A10_EVENTS.TXT")           ! EVENTS ONLY
+      OPEN(11,FILE="A11_SUMMARY.TXT")          ! SUMMARY OF COMPUTATION
+      OPEN(12,FILE="A12_RESIDUALS.TXT")        ! RESIDUALS
+      OPEN(13,FILE="A13_MODEL_3D.TXT")         ! MODEL (3D)
+C     OPEN(14,FILE="A14_SLICE_DEP.TXT")        ! MODEL (DEP SLICES)
+C     OPEN(15,FILE="A15_SLICE_LAT.TXT")        ! MODEL (LAT SLICES)
+C     OPEN(16,FILE="A16_SLICE_LON.TXT")        ! MODEL (LON SLICES)
+C     OPEN(17,FILE="A17_RAYPATH_D.TXT")        ! DIRECT WAVE ARRIVAL (OPEN IF REQUIRED)
+C     OPEN(18,FILE="A18_RAYPATH_R.TXT")        ! REFRACTED WAVE ARRIVAL (OPEN IF REQUIRED)
+C     OPEN(19,FILE="A19_RAYPATH_D_ALL.TXT")    ! ALL BDR DIRECT RAYS (OPEN IF REQUIRED)
+C     OPEN(20,FILE="A20_RAYPATH_R_ALL.TXT")    ! ALL BDR REFRACTED RAYS (OPEN IF REQUIRED)     
+C     OPEN(21,FILE="A21_CKB.TXT")              ! CKB MODEL (OPEN IF REQUIRED)
+C     OPEN(22,FILE="A22_PTB-PRIORI")           ! TO OBSERVE ANY CHANGED OF SIGN WHEN CKB IS INVERTED
+C     OPEN(23,FILE="A23_NEWHYPO.TXT")          ! RELOCATED EVENTS (OPEN IF REQUIRED)
+C     OPEN(31,FILE="A31_AVE_RES.TXT")          ! AVERAGE RESIDUALS (ALL BAZ) (OPEN IF REQUIRED)
+C     OPEN(32,FILE="A32_090.TXT")              ! AVERAGE RESIDUALS (0=BAZI<090) (OPEN IF REQUIRED)
+C     OPEN(33,FILE="A33_180.TXT")              ! AVERAGE RESIDUALS (90=BAZI<180) (OPEN IF REQUIRED)
+C     OPEN(34,FILE="A34_270.TXT")              ! AVERAGE RESIDUALS (180=BAZI<270) (OPEN IF REQUIRED)
+C     OPEN(35,FILE="A35_360.TXT")              ! AVERAGE RESIDUALS (270=BAZI<360) (OPEN IF REQUIRED)
+C     OPEN(36,FILE="A36_STN_USED.TXT")         ! LIST STATIONS USED (FOR GMT STATION PLOT)
+C     OPEN(41,FILE="A_DATA_PRE")               ! EVENTS AND STATION ARRIVAL TIMES (FROM (ISC, JWEED, SFILE, ETC)
+C     OPEN(42,FILE="A_DATA1")                  ! DATA 
+C     OPEN(43,FILE="A_DATA2")                  ! DATA AFTER RELOCATION
+C     OPEN(45)                                 ! RESERVED FOR TESTING OUTPUT  (OPEN IF REQUIRED)
+C     OPEN(50)                                 ! RESERVED FOR TESTING OUTPUT  (OPEN IF REQUIRED)
+C-------------------------------------------------------------------------------------
+!
+       WRITE(6,'(A25/A50/A28/A45/A32//A56/A74/A54//2(A54/))')
+     & 'PROGRAM      :  VELMODE',
+     & 'CODED BY     :  OSAGIE ABEL UYIMWEN (10/O3/2019)',
+     & 'LAST UPDATE  :  01/03/2022',
+     & 'EMAIL        :  abel.osagie@uniabuja.edu.ng',
+     & 'TELEPHONE    :  +2348122100528',
+     & 'PURPOSE      :  (1) TO COMPUTE TRAVELTIMES IN 3D MEDIA', 
+     & 'WITH CONSTANT OR LINEARLY VARYING VELOCITY FUNCTIONS',
+     & '(2) TO PERFORM 3D VELOCITY INVERSION',   
+     & 'TO USE DEFAULT SETTINGS (PREFERABLE)       ENTER:  1',
+     & 'TO MAKE CUSTOM SETTING                     ENTER:  2'
+       READ(*,*) JSET
+
+C      JSET = 1
+      IF(JSET .EQ. 1) THEN
+!--SELECTABLE PARAMETERS
+!     DEFAULT VALUES
+      MPS    = 1  ! (1) P, (2) S (SELECT PHASE FOR INVERSION)
+      JMODEL = 2  ! (1) IASP91, (2)AK135, (3)PREM, (4)LIENERT, (5)PARKFIELD, (6)KOREA, (7)T3D, (8)CKB
+      JBISC  = 0  ! (1) READ DATA FROM BISC
+      JSFLE  = 0  ! (1) READ SFILE
+      JIRIS  = 0  ! (1) READ IRIS SUMMARY FILE
+      JPATH1 = 1  ! (1) WRITE RAY PATH (FIRST ARRIVAL)
+      JPATH2 = 0  ! (1) WRITE RAY PATH (DIRECT WAVES & ALL BDR)
+      JPTB   = 0  ! (1) PERFORM PTB TO MODEL
+      JHYPO  = 0  ! (1) RELOCATE EVENTS 
+      GOTO 50
+      ELSE
+      GOTO 10
+      ENDIF
+C--------------------------------------------------------------------
+   10 WRITE(6,'(/2(A54/))')
+     & 'TO USE DATA FROM ISC                       ENTER:  1',
+     & 'IF DATA FROM ISC NOT AVAILABLE             ENTER:  0'
+      READ(*,*) JBISC
+C--------------------------------------------------------------------
+      WRITE(6,'(/2(A54/))')
+     & 'TO USE SFILE DATA FROM SEISAN              ENTER:  1',
+     & 'IF SFILE DATA NOT AVAILABLE                ENTER:  0'
+      READ(*,*) JSFLE
+C--------------------------------------------------------------------
+C      WRITE(6,'(/2(A54/))')
+C     & 'TO USE SUMMARY FILE FROM JWEED (IRIS)      ENTER:  1',
+C     & 'IF SUMMARY FILE NOT AVAILABLE              ENTER:  0'
+C      READ(*,*) JWEED
+C--------------------------------------------------------------------
+      WRITE(6,'(/A32//9(A28/))')
+     & 'CHOOSE A VELOCITY MODEL TO USE',
+     & 'FOR IASP91,      ENTER:  1',
+     & 'FOR AK135,       ENTER:  2',
+     & 'FOR PREM,        ENTER:  3',
+     & 'FOR LIENERT,     ENTER:  4',
+     & 'FOR PARKFIELD,   ENTER:  5',
+     & 'FOR KOREA,       ENTER:  6',
+     & 'FOR T3D,         ENTER:  7',
+     & 'FOR CKB,         ENTER:  8',
+     & 'FOR TEST MODEL,  ENTER:  9'
+      READ(*,*) JMODEL  
+C--------------------------------------------------------------------
+      WRITE(6,'(/A29/4(A60/))')
+     & 'VELOCITY MODEL INVERSION :',    
+     & 'TO USE P-WAVE FOR VELOCITY INVERSION,           ENTER:  1',
+     & 'TO USE S-WAVE FOR VELOCITY INVERSION,           ENTER:  2',
+     & 'SKIP INVERSION BUT WRITE 1ST ARRIVAL RAY-PATHS  ENTER:  3',
+     & 'SKIP INVERSION BUT WRITE ALL ARRIVAL RAY-PATHS  ENTER:  4'
+      READ(*,*) MPS                 ! PHASE TO USE FOR INVERSION (P- OR S-)
+      JPATH1 = 1                    ! WRITE RAY-PATH (FIRST ARRIVAL) 
+      JPATH2 = 0                    ! SKIP RAY-PATH (DIRECT WAVES & ALL BDR)     
+      IF(MPS .EQ. 4)JPATH2 = 1      ! WRITE RAY-PATH (DIRECT WAVES & ALL BDR) 
+C--------------------------------------------------------------------
+      JPTB   = 0                    ! (1) PERFORM PTB TO MODEL
+      WRITE(6,'(/2(A54/))')
+     & 'SKIP PERTURBATION                          ENTER:  0',
+     & 'TO PERFORM PERTURBATION (FOR TEST)         ENTER:  1'
+      READ(*,*) JPTB                         ! 1 = PERFORM PTB TO MODEL
+C--
+      PTB  = 0.0
+      IF(JPTB .EQ. 1)THEN
+      OPEN(21,FILE="A21_CKB.TXT")            ! OPEN PTB MODEL (NEW FILE)
+      OPEN(22,FILE="A22_PRIORI")
+      WRITE(22,'(A32)')'LON(DEG)  LAT(DEG)  Z(KM) IVD'     ! WRITE PTB PRIORI INFO
+      WRITE(6,'(/A32)')'ENTER % PERTURBATION FROM 1-10'
+      READ(*,*) PTB                          ! PERTUBATION LIMITS (1-10%)
+      WRITE(6,'(A44)')'ENTER NUMBER OF GRID SEPARATION, E.G 1,2...'
+      READ(*,*) MGP                          ! GRID SEPARATION
+      ENDIF
+C        
+C--------------------------------------------------------------------
+C      WRITE(6,'(/2(A54/))')
+C     & 'TO SKIP RELOCATION                         ENTER:  0',
+C     & 'TO RELOCATE EVENTS,(OPTIONAL)              ENTER:  1'
+C      READ(*,*) JHYPO                         ! (1) RELOCATE EVENTS  
+C 
+C--------------------------------------------------------------------
+   50 CALL STN_VEL                             ! LOAD STATION PARAMETERS
+C
+      IF(JPTB .EQ. 0)THEN
+      OPEN(13,FILE="A13_MODEL_3D.TXT")         ! MODEL (3D)
+      OPEN(14,FILE="A14_SLICE_DEP.TXT")        ! MODEL (DEP SLICES)
+      OPEN(15,FILE="A15_SLICE_LAT.TXT")        ! MODEL (LAT SLICES)
+      OPEN(16,FILE="A16_SLICE_LON.TXT")        ! MODEL (LON SLICES)
+      ELSEIF(JPTB .EQ. 1)THEN
+      OPEN(13,FILE="A13_CKB_3D.TXT")           ! MODEL (3D)
+      OPEN(14,FILE="A14_CKB_DEP.TXT")          ! MODEL (DEP SLICES)
+      OPEN(15,FILE="A15_CKB_LAT.TXT")          ! MODEL (LAT SLICES)
+      OPEN(16,FILE="A16_CKB_LON.TXT")          ! MODEL (LON SLICES)
+      ENDIF
+C---- 
+      IF(JHYPO .EQ. 0)THEN
+      WRITE(12,'(A59)')
+     & 'STN       ARID     EVID   Z(KM)   X(KM)    BAZC  RESC  RESR'
+      ELSE
+      WRITE(12,'(A59)')
+     & 'STN       ARID     EVID   Z(KM)   X(KM)    BAZC  RSC1  RSC2'
+      ENDIF
+      WRITE(13,'(A45)')'LON(DEG)  LAT(DEG)   Z(KM)    VPB%  V(KM/S)'     
+C--------------------------------------------------------------------
+      IF(JPATH1 .EQ. 1)THEN                  ! WRITE RAY PATH (FIRST ARRIVAL)
+      OPEN(17,FILE="A17_RAYPATH_D.TXT")      ! OPEN FILE FOR DIRECT WAVE ARRIVAL
+      OPEN(18,FILE="A18_RAYPATH_R.TXT")      ! OPEN FILE FOR REFRACTED WAVE ARRIVAL
+      WRITE(17,'(A57,A46)')
+     & 'STN   LAT(DEG)  LON(DEG)  Z(KM)   VZ   X(KM)   TIME   ANG',
+     & 'LBD JL KL JP  DEPTH  DIST   SN  EVENTID EV-NO'
+      WRITE(18,'(A57,A46)')
+     & 'STN   LAT(DEG)  LON(DEG)  Z(KM)   VZ   X(KM)   TIME   ANG',
+     & 'LBD JL KL JP  DEPTH  DIST   SN  EVENTID EV-NO'
+      ENDIF
+C      
+! WRITE RAY PATH    
+      IF(JPATH2 .EQ. 1)THEN                  
+      OPEN(19,FILE="A19-RAYPATH-D-ALL.TXT")  ! OPEN FILE FOR ALL BDR DIRECT WAVE RAY PATH 
+      OPEN(20,FILE="A20-RAYPATH-R-ALL.TXT")  ! OPEN FILE FOR ALL BDR REFRACTED WAVE RAY PATH       
+      WRITE(19,'(A57,A53)')
+     & 'STN   LAT(DEG)  LON(DEG)  Z(KM)   VZ   X(KM)   TIME   ANG',
+     & 'LBD JL KL JP  DEPTH  DIST   AZI    SN  EVENTID EV-NO'
+      WRITE(20,'(A57,A53)')
+     & 'STN   LAT(DEG)  LON(DEG)  Z(KM)   VZ 1  X(KM)   TIME   ANG',
+     & 'LBD JL KL JP  DEPTH  DIST   AZI    SN  EVENTID EV-NO'
+      ENDIF
+C      
+C----------
+      IF(JBISC .EQ. 1)THEN              ! USE BISC FILE
+      CALL INPUT_BISC                   ! CREATE A_INPUT FILE FOR ALL EVENTS WITHIN SELECTED AREA
+      WRITE(6,'(/A35/5I7//A29)')
+     & 'NST   MEQS  P-ARR  S-ARR TOT-AR',
+     & NST,MEQS,MPA,MSA,MAPS,
+     & 'DATASET  : PREPARED DATASET'
+      ENDIF 
+C----------------------------------------------
+      IF(JSFLE .EQ. 1)THEN              ! USE S-FILE FROM SEISAN
+      CALL INPUT_SFILE                  ! APPEND TO A_INPUT (IF SFILE EXIST)
+      WRITE(6,'(/A35/5I7//A29)')
+     & 'NST   MEQS  P-ARR  S-ARR TOT-AR',
+     & NST,MEQS,MPA,MSA,MAPS,
+     & 'DATASET  : PREPARED DATASET'
+      ENDIF       
+C----------------------------------------------
+!
+!-----------  BEGIN COMPUTATION  -------------------------------------------------    
+      ITR   = 0
+  100 CONTINUE 
+      ITR    = ITR + 1               ! ITERATION COUNT
+      NTOPTS = 0                     ! TOTAL NUMBER OF OBSERVATIONS(NO. OF POINTS/RAY * NO. OF RAYS)
+      DO 101 I = 1,MDAT              ! MDAT = 100000 MAX NDAT
+      JHIT(I) = 0                    ! GRID CELLS WITH HITCOUNT
+      JVD(I)  = 0                    ! PTB PRIORI IDENTIFIER
+  101 CONTINUE
+!  
+      CALL GRID                      ! INITIATE MODEL PARAMETERS
+      CALL INPUT_PRE                 ! READ FROM A_DATA_PRE TO CREATE A_DATA1
+      IF(JHYPO .EQ. 1)THEN
+      NDAT  = 0                      ! TOTAL NUMBER OF DATA USED
+      CALL ALOCATE
+      DO 200 I = 1,NEQS
+      NE  = I
+      CALL RELOCATE                  ! RELOCATE EARTHQUAKES USING A_DATA2 FILE      
+  200 CONTINUE 
+      CLOSE(41)
+      ENDIF
+      CALL FORWARD                   ! READ EVENTS AND P/S ARRIVAL TIMES FROM A_DATA1 AND CREAT A_DATA2
+      CALL AZI_RES                   ! CLACULATE TRAVELTIME AVERAGES   
+      IF(MPS .LE. 2)CALL INVERSION   ! PERFORM MODEL INVERSION MPS=1 OR 2
+      IF(ITR .GE. ITRMAX)GOTO 900
+      GOTO 100
+C      
+  900 CONTINUE
+C--------------------------------------------------------------------------------      
+C
+      WRITE(11,'(/A48/6I8//A38,A32/2F9.4,2F10.4,2F8.2,2F8.1//
+     &  A54/2F9.4,2F10.4,2F8.4)')
+     & 'NSTA    NEQS    NDAT     NAP     NAS    NAPS',
+     &  NSTA,NEQS,NDAT,NAP,NAS,NAP+NAS,
+     & 'MIN-ELAT MAX-ELAT  MIN-ELON  MAX-ELON',
+     & 'MIN-DEP MAX-DEP MIN-MAG MAX-MAG',
+     &  ELAT_MIN,ELAT_MAX,ELON_MIN,ELON_MAX,DEP_MIN,DEP_MAX,
+     &  FMAG_MIN,FMAG_MAX,
+     & 'MIN-SLAT MAX-SLAT  MIN-SLON  MAX-SLON MIN-ELV MAX-ELV',
+     &  SLAT_MIN,SLAT_MAX,SLON_MIN,SLON_MAX,SELV_MIN,SELV_MAX
+C       
+      WRITE(6,'(//A25//A48/6I8//A38,A32/2F9.4,2F10.4,2F8.2,2F8.1//
+     &  A54/2F9.4,2F10.4,2F8.4//7(A52/)//A23)')
+     & 'COMPUTATION IS COMPLETE',
+     & 'NSTA    NEQS    NDAT     NAP     NAS    NAPS',
+     &  NSTA,NEQS,NDAT,NAP,NAS,NAP+NAS,
+     & 'MIN-ELAT MAX-ELAT  MIN-ELON  MAX-ELON',
+     & 'MIN-DEP MAX-DEP MIN-MAG MAX-MAG',
+     &  ELAT_MIN,ELAT_MAX,ELON_MIN,ELON_MAX,DEP_MIN,DEP_MAX,
+     &  FMAG_MIN,FMAG_MAX,
+     & 'MIN-SLAT MAX-SLAT  MIN-SLON  MAX-SLON MIN-ELV MAX-ELV',
+     &  SLAT_MIN,SLAT_MAX,SLON_MIN,SLON_MAX,SELV_MIN,SELV_MAX,
+     & 'FIND LIST OF EVENTS                : A10-EVENTS   ',
+     & 'FIND VELOCITY PERTURBATION         : A11-VMODEL   ',
+     & 'FIND COMPUTATION SUMMARY           : A12-SUMMARY  ',
+     & 'FIND STATION ARRIVAL CALCULATIONS  : A13-RESIDUALS',
+     & 'FIND AVERAGE RESIDUALS             : A13-AVE-RES  ',
+     & 'FIND RAYPATH FOR DIRECT WAVE       : A14-RAYPATH-D',
+     & 'FIND RAYPATH FOR REFRACTED WAVE    : A15-RAYPATH-R',
+     & 'PRESS "ENTER" TO EXIT'
+      READ(*,*)                           ! PAUSE TO SEE CONSOLE
+      END PROGRAM VELMODE     
+C_______________________________________________________________________
+C_______________________________________________________________________
+C
+      SUBROUTINE STN_VEL
+      INCLUDE "A_PARAM_MALAY.INC"  
+!    CODED BY: OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!              TO READ BOTH STATION DATA AND 1D VELOCITY MODEL 
+C
+      CHARACTER*1  :: AMOH                ! MOHO LAYER IDENTIFIER
+      I   = 0                             ! STN COUNT   (MAX = MST)   
+      L   = 0                             ! LAYER COUNT (MAX = ML)
+! READ STATION PARAMETERS
+   10 READ(1,'(A100)',END=100)LNS
+      IF(LNS(1:1) .NE. '=')GOTO 10        ! GLOBAL STN LIST HAS "===..." 
+   11 READ(1,'(A100)',END=100)LNS
+C      STA      = LNS(1:5)                ! READ STATION NAME CODE
+      READ(LNS(7:15),'(F9.5)')   SLA      ! READ STATION LATITUDE
+      READ(LNS(17:26),'(F10.5)') SLO      ! READ STATION LONGITUDE
+      READ(LNS(28:35),'(F8.4)')  SEV      ! READ STATION ELEVATION
+C      IF(SLA .LT. SLAMIN .OR. SLA .GT. SLAMAX)GOTO 11        ! SKIP STN OUTSIDE LAT RANGE 
+C      IF(SLO .LT. SLOMIN .OR. SLO .GT. SLOMAX)GOTO 11        ! SKIP STN OUTSIDE LON RANGE 
+      IF(SLA .EQ. 0.0)GOTO 100            ! STATION ENDS   
+      I        =  I+1
+      STN(I)   =  LNS(1:5)                ! READ STATION NAME CODE
+      STUS(I)  =  LNS(38:43)              ! READ STATION STATUS (A7)
+      SLOC(I)  =  LNS(46:66)              ! READ COUNTRY (A21)
+      SCTY(I)  =  LNS(69:98)              ! READ STATION CITY/PROVINCE (A30)
+      SLAT(I)  =  SLA                     ! PARSE STN LAT
+      SLON(I)  =  SLO                     ! PARSE STN LON
+      SELV(I)  =  -SEV                    ! PARSE STN ELEVATION
+      NST      =  I           
+C      WRITE(6,'(A5,F10.5,F11.5,F9.4,1X,A15,1X,A20,I8)')
+C     & STN(I),SLAT(I),SLON(I),-SELV(I),SLOC(I),SCTY(I),I 
+      GOTO 11
+100   CLOSE(1)
+!
+! READ 1D VELOCITY MODEL
+   20 READ(2,'(A70)',END=200)LNS          ! READ BLANCK LINE
+      READ(LNS(32:32),'(I1)') KMODEL      ! READ MODEL IDENTIFIER (1-9)
+      IF(JMODEL .NE. KMODEL)GOTO 20       ! RETURN FOR NON CHOSEN MODEL
+      WRITE(6,'(/A32)')
+     & '---- 1D VELOCITY MODEL ----'
+      WRITE(6,'(A5,A70)')'S/N',LNS
+   21 READ(2,'(F8.2,2F10.5,1X,A1)',END=200) BVL,VPL,VSL,AMOH
+      IF(VSL .EQ. 0) VSL = VPL/SQRT(3.0)  ! ESTIMATE VS IF NOT IN MODEL 
+      IF(VPL .EQ. 0.0)GOTO 29             ! MODEL READING ENDS
+      L     = L+1
+      BV(L) = BVL
+      VP(L) = VPL
+      VS(L) = VSL
+      IF(AMOH .EQ. 'M') MOH = L           ! GET MOHO LYR NUMBER
+      NL    = L  
+      WRITE(6,'(I5,3F9.4,1X,A1)')NL,BV(L),VP(L),VS(L),AMOH
+      GOTO 21
+   29 CONTINUE 
+C
+      WRITE(6,'(/A17,I3/)')'MOHO BOUNDARY =',MOH
+      WRITE(6,'(A14/)')'PROCESSING...' 
+  200 CLOSE(2)      
+      END SUBROUTINE STN_VEL      
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE GRID
+      INCLUDE "A_PARAM_MALAY.INC"
+      CHARACTER*3    :: CZ(MZ)
+      CHARACTER*5    :: CZ2(MZ)
+C
+      MX1    = MX-1               ! LAT  RANGE-1
+      MY1    = MY-1               ! LONG RANGE-1
+      MZ1    = MZ-1               ! DEP   RANGE-1
+      MX2    = MX-2               ! LAT RANGE WITHOUT BOTH ENDS
+      MY2    = MY-2               ! LON RANGE WITHOUT BOTH ENDS
+      MZ2    = MZ-2               ! DEP RANGE WITHOUT BOTH ENDS
+      MXY    = MX2*MY2            ! PLANE (LAT*LON)
+      NODES  = MX2*MY2*MZ2        ! TOTAL NUMBER OF GRID POINTS 
+C
+      GX(1)   = GLAMIN - 10.0     ! MIN LAT ENDPOINT (FAR AWAY)
+      GX(MX)  = GLAMAX + 10.0     ! MAX LAT ENDPOINT (FAR AWAY)
+      DO 30 I = 2,MX1
+      II      =  MX1+2 - I
+      GX(I)   = GLAMIN + (GLAMAX-GLAMIN)/(MX-3)*(I-2) ! LAT GRID SEQUENCE (MINUS ENDPOINTS)
+   30 CONTINUE
+      GY(1)   = GLOMIN - 10.0     ! MIN LON  ENDPOINT (FAR AWAY)
+      GY(MY)  = GLOMAX + 10.0     ! MAX LON  ENDPOINT (FAR AWAY)
+      DO 40 I = 2,MY1
+      GY(I)   = GLOMIN + (GLOMAX-GLOMIN)/(MY-3)*(I-2) ! LON GRID SEQUENCE (MINUS ENDPOINTS)
+   40 CONTINUE
+      GZ(1)   = -200.0            ! MIN DEPTH END OF GRID (FAR FROM THE SURFACE)
+      GZ(MZ)  =  200.0            ! MAX DEPTH END OF GRID (FAR FROM BOTTOM DEPTH)
+      DO 50 I = 2,MZ1
+C     DEPTH GRID SEQUENCE (MINUS ENDPOINTS)
+C      IF(I .LE. 3) GZ(I)= I-1                       ! (1,2)
+C      IF(I .GT. 3 .AND. I .LE. 11) GZ(I)= 5.0*(I-3) ! (5,10,15,20,25,30,35,40)
+C      IF(I .GT. 11) GZ(I)= 10.0*(2.0*(I-9)-1)       ! (50,70,90,---)
+      IF(I .LE. 4) GZ(I)= 5.0*(I-1)            ! (5,10,15)
+      IF(I .GT. 4 .AND. I .LE. 6) GZ(I)= 5.0*(2.0*(I-2)-1) ! (25,35)
+      IF(I .GT. 6) GZ(I)= 10.0*(2.0*(I-4)-1)    ! (50,70,90,---)                         ! (250,300,350,400,...)
+   50 CONTINUE 
+C                 
+C     WRITE OUT THE GRID DIMENSIONS
+      WRITE(6,'(/A18/A15/3I5)')'--- GRID POINTS---',
+     & '  LAT  LON  DEP',MX2,MY2,MZ2
+      WRITE(6,'(10F7.2)') (GX(I),I=2,MX1)  ! LAT POINTS
+      WRITE(6,'(A)') ' '
+      WRITE(6,'(10F7.2)') (GY(I),I=2,MY1)  ! LON POINTS
+      WRITE(6,'(A)') ' '
+      WRITE(6,'(10F7.2)') (GZ(I),I=2,MZ1)  ! DEPTH POINTS
+C      
+      WRITE(11,'(/A18/A15/3I5)')'--- GRID POINTS---',
+     & '  LAT  LON  DEP',MX2,MY2,MZ2
+      WRITE(11,'(10F7.2)') (GX(I),I=2,MX1) ! LAT POINTS
+      WRITE(11,'(A)') ' '
+      WRITE(11,'(10F7.2)') (GY(I),I=2,MY1) ! LON POINTS
+      WRITE(11,'(A)') ' '
+      WRITE(11,'(10F7.2)') (GZ(I),I=2,MZ1) ! DEPTH POINTS
+C-----
+      WRITE(6,'(/A22/A22)')'- INITIAL 1-D MODEL -','DEP   VP  LYR'    
+      DO 60 K = 1,MZ                       ! START WITH DEPTH TOP ENDPOINT
+      CALL SLAY(GZ(K),LAY)                 ! GET LAYER NUMBER
+      CALL VEL1D(GZ(K),LAY,MPS,V1)         ! GET VELOCITY OF LAYER
+C      
+      WRITE(CZ(K),'(I3)') INT(GZ(K))       ! CONVERT DEPTH (INTEGER) TO CHARACTER
+      CZ2(K) = TRIM(ADJUSTL(CZ(K)))//'KM'  ! ADJUST CHARACTER AND CONCATENATE      
+      KZ = 1                               ! ALL BUT DEPTH ENDPOINTS
+      IF(K .EQ. 1 .OR. K .EQ. MZ)KZ = 0    ! REMOVE DEPTH ENDPOINTS
+      IF(K .GT. 1 .AND. K .LT. MZ)      
+     & WRITE(6,'(I4,F8.2,F6.2,I4)')K-1,GZ(K),V1,LAY
+C      
+      DO 61 I = MX,1,-1                    ! MAX LAT --> MIN LAT
+      KX = 1                               ! ALL BUT LAT ENDPOINTS
+      IF(I .EQ. 1 .OR. I .EQ. MX)KX = 0    ! REMOVE LAT ENDPOINTS
+      DO 62 J = 1,MY                       ! MIN LON --> MAX LON
+      KY = 1                               ! ALL BUT LON ENDPOINTS
+      IF(J .EQ. 1 .OR. J .EQ. MY)KY = 0    ! REMOVE LON ENDPOINTS
+      DV          = 0.0
+      DV0(I,J,K)  = 0.0                    ! WITHOUT PTB 
+      VE0(I,J,K)  = V1                     ! PARSE IRRESPECTIVE OF JPTB CHOICE
+      KITP(I,J,K) = 0
+      DV1(I,J,K)  = DV0(I,J,K)             ! PARSE WITHOUT PTB 
+      VE1(I,J,K)  = VE0(I,J,K)             ! PARSE VEL FOR WITHOUT PTB
+C-----
+      IF(JPTB .EQ. 1)THEN                  ! CREATE PTB MODEL
+      IF(KZ .EQ. 1) THEN
+      CALL CKBOARD(I,J,K,PTB,DV,MGP,0)
+      DV1(I,J,K) = DV                      ! -PTB & +PTB IN % 
+      VE1(I,J,K) = V1*(1.0 + 0.01*DV)      ! INTODUCE PTB TO VEL VALUES
+      IF(KY .EQ. 1 .AND. KX .EQ.1)THEN     ! REMOVE LAT & LON ENDPOINTS
+C      WRITE(71,'(2F10.4,3F8.2)')GY(J),GX(I),-GZ(K),DV,VE1(I,J,K)
+      ENDIF
+      ENDIF
+      ENDIF
+C-----      
+   62 CONTINUE
+   61 CONTINUE
+   60 CONTINUE
+      WRITE(6,*)                            ! WRITE SPACE AFTER INITIAL 1-D MODEL VELOCITY
+C      
+      DFLAT = 1                             ! FOR CKB PLOT
+      IF(JPTB .EQ. 1)THEN                   ! CREATE PTB MODEL
+      WRITE(21,'(A19,20(A7))')
+     & 'LON(DEG) LAT(DEG)',(ADJUSTR(CZ2(K)),K=2,MZ1)
+      DO 70 J = 2,MY1                      ! (3) LON: EAST --> WEST
+      DO 71 I = MX1,2,-1                   ! (2) LAT: NORTH --> SOUTH
+      WRITE(21,'(2F9.4,1X,20F7.2)')
+     & GY(J),GX(I),(DV1(I,J,K), K=2,MZ1),DFLAT    ! (1) DEP: TOP --> BOTTOM
+   71 CONTINUE 
+   70 CONTINUE
+      ENDIF  
+C
+!CRATE GRID POINTS
+      AAX      = 1.0 - GX(1)*100.0           ! 1 - 0.01 UNIT STEP(LATITUDE)
+      IXMAX    = INT(GX(MX)*100.0 + AAX)     ! JAX(1) .EQ. 1
+      IX       = 1                           ! JAX(I) .GT. 1 (I .NE.1)
+      DO 80  I = 1,IXMAX
+      IX1      = IX+1
+      XNOW     = (REAL(I) - AAX)/100.0
+      IF(XNOW .GE. GX(IX1)) IX = IX1
+      JAX(I)   = IX                          ! INTEGER PTS BTW LAT0 & LAT9
+C      WRITE(50,'(2F8.2,2I6,A2)')AAX,XNOW,I,JAX(I),'X'
+   80 CONTINUE
+      AAY      = 1.0 - GY(1)*100.0           ! JAY(MGD) 0.01 UNIT STEP(LONGITUDE)
+      IYMAX    = INT(GY(MY)*100.0 + AAY)
+      IY       = 1
+      DO  90 I = 1,IYMAX
+      IY1      = IY+1
+      YNOW     = (REAL(I) - AAY)/100.0
+      IF(YNOW .GE. GY(IY1)) IY = IY1
+      JAY(I)   = IY                          ! INTEGER PTS BTW LON0 & LON9
+C      WRITE(50,'(2F8.2,2I6,A2)')AAY,YNOW,I,JAY(I),'Y'
+   90 CONTINUE
+      AAZ      = 1.0 - GZ(1)                 ! JAZ(MGD) 1.0 UNIT STEP (DEPTH IN KM)
+      IZMAX    = INT(GZ(MZ)+ AAZ)
+      IZ       = 1
+      DO 100 I = 1,IZMAX
+      IZ1      = IZ+1
+      ZNOW     = REAL(I)- AAZ
+      IF(ZNOW .GE. GZ(IZ1)) IZ = IZ1
+      JAZ(I)   = IZ                          ! INTEGER PTS BTW SURFACE & MAX DEPTH
+C      WRITE(50,'(2F8.2,2I6,A2)')AAZ,ZNOW,I,JAZ(I),'Z'
+  100 CONTINUE 
+C      
+      END SUBROUTINE GRID ! END  INITIALIZATION OF PARAMETERS  
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE ALOCATE
+      INCLUDE "A_PARAM_MALAY.INC"
+      OPEN(3,FILE="A_DATA1")             ! EVENTS AND STATION ARRIVAL TIMES
+
+      I     = 0                          ! EVENT COUNTER
+  100 READ(3,'(A90)',END=900)LNE         ! EVENT LINE SEARCH
+      IF(LNE(1:4) .NE. 'YYYY') GOTO 100  ! RETURN IF NOT EVENT
+      READ(3,'(A90/)',END=900)LNE
+      READ(LNE(73:75),'(I3)')NAR         ! READ NUMBER OF ARRIVAL
+      I  = I+1
+      LNE1(I) = LNE
+      NEQS  = I                          ! PARSE NO. OF USEFUL EVENTS
+C      
+      DO 105 J  = 1,NAR
+      READ(3,'(A89)')LNS
+      LNS1(J,I) = LNS
+  105 CONTINUE  
+  
+      GOTO 100      
+  900 CLOSE(3)  
+      RETURN
+      END SUBROUTINE ALOCATE
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE RELOCATE
+      INCLUDE "A_PARAM_MALAY.INC"
+!     MODIFIED BY : OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     PURPOSE     : TO RELOCATE EVENTS
+!     SUBROUTINES : SLAY, STN_CORD, DAZXY, TRAVT & DERIVATIVES(1)
+C-----
+      CHARACTER*6  :: DSOS            ! DATA SOURCE
+      DIMENSION   ADJ(4),EROR(4),GF(5,11),ANS(5,6)
+C----
+C     OPEN(3,FILE="A_DATA1")             ! EVENTS AND STATION ARRIVAL TIMES
+      OPEN(43,FILE="A_DATA2")            ! EVENTS AND STATION ARRIVAL TIMES
+
+      LNE  = LNE1(NE)                    ! PARSE EVENT LINE
+      CMAG = LNE(55:57)                  ! READ  MAG SYMBOL (CHARACTER)
+      EVID = LNE(59:67)                  ! READ EVENT ID (CHARACTER)
+      DSOS = '(BISC)'
+      IF(EVID .EQ. "000000000")DSOS = '(SFIL)'   ! IDENTIFY BISC EVENTS
+      READ(LNE(12:13),'(I2)')   IHR      ! READ EVENT HOUR (INTEGER) 
+      READ(LNE(15:16),'(I2)')   IMI      ! READ EVENT MINUTE (INTEGER) 
+      READ(LNE(18:22),'(F5.2)') SEC0     ! READ EVENT SECOND (REAL) 
+      READ(LNE(23:31),'(F9.4)') FLA      ! READ EVENT LATITUDE (REAL) 
+      READ(LNE(32:41),'(F10.4)')FLO      ! READ EVENT LONGITUDE(REAL)
+      READ(LNE(44:49),'(F6.2)') DEP      ! READ EVENT DEOTH (REAL)
+      READ(LNE(50:53),'(F4.1)') FMAG     ! READ EVENT MAGNITUDE (REAL)
+      READ(LNE(69:71),'(I3)')   LAYR     ! READ EVENT LAYER
+      READ(LNE(73:75),'(I3)')   NAR      ! READ NUMBER OF ARRIVAL
+
+      T0 = 60.0*IMI + SEC0    ! CONVERT ORIGIN TIME TO SECOUNDS (HOUR+ MINUTE+ SEC)             
+C-----
+      EQID(NE) = EVID                    ! PARSE EVENT ID  (WHEN ARRIVAL IS 1)
+      ELAT(NE) = FLA                     ! PARSE EVENT LAT (WHEN ARRIVAL IS 1)
+      ELON(NE) = FLO                     ! PARSE EVENT LON        "
+      EDEP(NE) = DEP                     ! PARSE EVENT DEPTH      "
+      ESEC(NE) = SEC0                    ! PARSE ARRIVAL TIME (SECONDS VALUE)
+      LAYS(NE) = LAYR                    ! PARSE SOURCE LAYER NUMBER                 
+      EVC(1,NE) = (90.0-FLA)*DEG
+      EVC(2,NE) = FLO*DEG
+      EVC(3,NE) = DEP
+C-----      
+      ITRR    = 0  ! NO OF HYPOCENTER RELOCATIONS RELOCATION PER ITERATION
+  101 ITRR    = ITRR+1
+      DO 105 J  = 1,NAR
+      JPS = J
+      LNS = LNS1(JPS,NE)    
+      STA  = LNS(1:5)                    ! EXTRACT STN CODE
+C     PHAS  = LNS(21:23)                 ! EXTRACT PHASE LETTERS (P/S)
+C     READ(LNS(7:8),'(I2)')      JHR     ! P/S HOUR
+C     READ(LNS(10:11),'(I2)')    JMI     ! P/S MINUTES
+C     READ(LNS(13:17),'(F5.2)')  SEC1    ! P/S SECONDS
+      READ(LNS(19:20),'(I2)')    KPS     ! P/S PHASE NUMBER
+      READ(LNS(27:33),'(F7.2)')  TT2     ! P/S TRAVELTIME(S)
+      READ(LNS(34:41),'(F8.2)')  DXD2    ! EPICENTRAL DIST(CALCULATED)
+C     READ(LNS(42:49),'(F8.2)')  DXD1    ! EPICENTRAL DIST  (REPORTED)
+      READ(LNS(50:55),'(F6.2)')  RES2    ! RESIDUAL       (CALCULATED)
+C     READ(LNS(56:61),'(F6.2)')  RES1    ! RESDIUAL         (REPORTED)
+      READ(LNS(62:68),'(F7.2)')  BAZ2    ! BACK-AZIMUTH   (CALCULATED)
+      READ(LNS(71:78),'(A8)')    ARID    ! ARRIVAL ID
+      READ(LNS(79:85),'(I7)')    KSTN    ! STN POSITION
+C-----
+      JDAT  = J
+      JSTN  = KSTN                       ! STN POSITION
+      DXDC  = DXD2                       ! PARSE EPICENTRAL DISTANCE   (CALCULATED)
+      BZMC  = BAZ2                       ! PARSE BACK-AZIMUTH          (CALCULATED)
+      IDPS  = KPS                        ! PARSE P/S ARRIVAL PHASE NUMBER(REPORTED)
+C-----
+      CALL TRAVT                         ! GET TRAVEL-TIME AND RAY-PATH
+C-----
+      NDAT  = NDAT + 1                   ! COUNT NUMBER OF DATA ACTUALLY USED
+C    PARSE TO GLOBAL FOR RESIDUAL ANALYSIS     
+      STNA(NDAT) = STA
+      JSTC(NDAT) = JSTN
+      BAZC(NDAT) = BZMC
+      RESC(NDAT) = RES2
+C      WRITE(50,'(A5,1X,A9,I7,2F8.2,I5)')
+C     & STNA(NDAT),ARID,NDAT,RES2,RMSC,ITRR
+C-----
+      CALL DERIVATIVES(2)                 ! GET TRAVTIME DERIVATIVES MPS=1 OR 2
+C-----
+ 105  CONTINUE
+       NARK = NAR       
+      CALL WTHYP(NARK,GF,RMSC,NARW)
+      IF(NARW .LE. 4) GOTO 109       
+      CALL LINER(4,9,GF,ANS)
+      DO 120  J = 1,4
+      ADJ(J)    = ANS(J,1)
+      IF(J .EQ. 2 .OR. J .EQ. 3) ADJ(J) = ADJ(J)*0.01
+120   CONTINUE
+C-----
+      ANS(5,1) = -1.0
+      SG = 0.0
+      DO 121  K = 1,5
+      DO 122  L = 1,5
+      SG = SG + GF(K,L)*ANS(K,1)*ANS(L,1)
+122   CONTINUE
+121   CONTINUE
+C-----
+      DT   = SQRT(ABS(SG)/(NARW-4))
+      DO 130 K = 1,4
+      J = K+1
+      EROR(K) = SQRT(ABS(ANS(K,J)))*DT
+      IF(K .EQ. 2 .OR. K .EQ. 3) EROR(K) = EROR(K)*0.01/DEG
+130   CONTINUE
+C-----
+      HADJ   = ADJ(4) + DEP
+      IF(HADJ .LT. 0.0) ADJ(4) = 0.0
+      T0 = T0 + ADJ(1)    ! GET NEW SEC
+      D0 = D0 + ADJ(1) 
+      DO 140 K = 1,3
+      J = K+1
+      EVC(K,NE) = EVC(K,NE) + ADJ(J)
+140   CONTINUE
+      IF(EVC(3,NE) .GT. DEPMAX) EVC(3,NE) = DEPMAX 
+      IF(EVC(3,NE) .LT. 0.0) EVC(3,NE) = 0.0
+            
+C-----
+109   T2   = T0
+C      IM2 = FLOOR(T2/60)        ! EXTRACT HOUR (INTEGER)
+C      SEC2  = ((T2/60)-IM2)*60   ! MINUTE IN DECIMAL     
+C      WRITE(50,'(2F10.2,I4,F10.4,1X,A9)')
+C     & T0,D0,IM2,SEC2,EVID
+
+      FLA2   = 90.0-EVC(1,NE)/DEG
+      FLO2   = EVC(2,NE)/DEG
+      DEP2   = EVC(3,NE)
+      RMS2   = RMSC             ! PARSE RMS  
+      ERTIM  = EROR(1)
+      ERLAT  = EROR(2)
+      ERLON  = EROR(3)
+      ERDEP  = EROR(4)
+      IF(ITRR .LT. LOCMAX .AND. RMSC .GT. RMSCUT)GOTO 101   
+
+      IF(NAR .LE. 4) THEN
+      WRITE(43,'(/A42,A33,1X,A6,I8/A85/A49,A36)')
+     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(deg)  LON(deg)',
+     & 'Z(km) MAG      EVENT-ID LYR NAR',DSOS,NE,
+     & LNE,
+     & 'STN   HR:MI: SEC   ID       TC(s)  XC(km)  XR(km)', 
+     & 'RESC  RESR   BAZC     ArvID   JSTN'    
+      DO 115 J  = 1,NAR 
+      WRITE(41,'(A89)')LNS1(J,NE) 
+  115 CONTINUE
+      ELSEIF(NAR .GT. 4) THEN
+      IM2  = FLOOR(T2/60)       ! EXTRACT MINUTE (INTEGER)
+      SEC2 = ((T2/60)-IM2)*60    !SECOND IN DECIMAL     
+      WRITE(43,'(/A42,A33,1X,A6,A43/A14,I2,A1,F5.2,F9.4,F10.4,
+     & F8.2,A26,I10,A1,F5.2,2F10.4,F6.2,F8.4/A49,A36)')
+     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(deg)  LON(deg)',
+     & 'Z(km) MAG      EVENT-ID LYR NAR',DSOS,
+     & 'MI:SS.SS  LAT(PRE)  LON(PRE) Z(km)     RMS',
+     & LNE,IM2,':',SEC2,FLA2,FLO2,DEP2,LNE(50:75),
+     & IMI,':',SEC0,FLA,FLO,DEP,RMS2,
+     & 'STN   HR:MI: SEC   ID       TC(s)  XC(km)  XR(km)', 
+     & 'RESC  RESR   BAZC     ArvID   JSTN'
+      DO 116 J  = 1,NAR 
+      WRITE(43,'(A89)')LNS1(J,NE) 
+  116 CONTINUE
+      END IF
+     
+      
+C      WRITE(41,'(/A42,A28,A40)')
+C     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(deg)  LON(deg)',
+C     & 'Z(km) MAG MBS  EVENTID NAR',
+C     & 'SS.SS  LAT(deg) LON(deg)  Z(km)    RMS'
+C      WRITE(41,'(A66,I4,F7.2,F9.4,F10.4,F7.2,F7.4/A49,A36)')
+C     & LNE,NAR,SEC2,FLA2,FLO2,DEP2,RMS2,
+C     & 'STN   HR:MI: SEC   ID       TC(s)  XC(km)  XR(km)', 
+C     & 'RESC  RESR   BAZC     ArvID   JSTN'
+C      END IF
+      RETURN
+      CLOSE(43)     
+      END SUBROUTINE RELOCATE
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+
+      SUBROUTINE FORWARD   
+      INCLUDE "A_PARAM_MALAY.INC"
+!     CODED BY: OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!
+!              (1) TO READ EVENTS AND STATION ARRIVAL TIMES (VELMODE DEFAULT INPUT FILE)
+!              (2) CALCULATE TRAVELTIMES (AND RAYPATHS IF REQUIRED)
+!              (3) CALCULATE TRAVELTIME DERIVATIVES
+!              (4) PREPARE A_DATA2 AS INPUT TO "RELOCATE"
+! SUBROUTINES : SLAY, STN_CORD, DAZXY, TRAVT & DERIVATIVES(1)
+C     CHARACTER*5    :: STNQ(100)       ! HOLD STAION CODE
+C     CHARACTER*3    :: PHAQ(100)       ! HOLD PHASE
+      CHARACTER*6    :: DSOS            ! DATA SOURCE
+      CHARACTER*8    :: ARV(100)      ! HOLD ARRIVAL ID
+      CHARACTER*25   :: LSL(100)       ! HOLD STAION LINE
+      REAL*4, DIMENSION(100) :: TTC,XD2,XD1,RS2,RS1,BZ2
+      INTEGER,DIMENSION(100) :: KST
+!------------------------------------------------------------------------
+!
+      IF(JHYPO .EQ. 1)THEN             ! OPTION TO RELOCATE IS SELECTED AND 
+      OPEN(3,FILE="A_DATA2")           ! A_DATA2 WOULD HAVE BEEN CREATED
+      ELSE
+      OPEN(3,FILE="A_DATA1")
+      ENDIF
+C
+C      OPEN(43,FILE="A_DATA3")            ! EVENTS AND STATION ARRIVAL TIMES
+C-- WRITE HEADER TO CONSOLE,EVENT ONLY FILE (10), EVENT & ARRIVAL FILE (45)    
+      WRITE(6,'(A42,A39)')
+     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(DEG)  LON(DEG)',
+     & 'Z(KM) MAG MBS  EVENTID LYR ARV     SN'
+      WRITE(10,'(A42,A33)')
+     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(DEG)  LON(DEG)',
+     & 'Z(KM) MAG       EVENTID LYR ARV'
+
+      I     = 0                          ! EVENT COUNTER 1
+      IEV   = 0                          ! USEFUL EVENT COUNTER 1
+      JEV   = 0                          ! USEFUL EVENT COUNTER 2
+      NDAT  = 0                          ! TOTAL NUMBER OF DATA USED
+      NAP   = 0                          ! TOTAL NUMBER OF P- ARRIVAL DATA
+      NAS   = 0                          ! TOTAL NUMBER OF S- ARRIVAL DATA
+C     IDC   = 0                          ! DATA SOURCE IDENTIFIER
+  100 READ(3,'(A78)',END=900)LNE         ! EVENT LINE SEARCH
+      IF(LNE(1:4) .NE. 'YYYY')GOTO 100   ! RETURN IF NOT EVENT
+      READ(3,'(A90/)',END=900)LNE
+      DSOS = LNE(77:82)                  ! GET DATA SOURCE
+      READ(LNE(73:75),'(I3)')NAR         ! READ NUMBER OF ARRIVAL
+      IF(NAR .LT. MINDAT)GOTO 100        ! RETURN IF < MIN ARRIVAL DATA
+      CMAG = LNE(55:57)                  ! READ  MAG SYMBOL (CHARACTER)
+      EVID = LNE(59:67)                  ! READ EVENT ID (CHARACTER)
+C     READ(LNE(1:4),'(I4)')     IY4      ! READ EVENT DATE (INTEGER) 
+C     READ(LNE(6:7),'(I2)')     IMO      ! READ EVENT MONTH (INTEGER) 
+C     READ(LNE(9:10),'(I2)')    IDD      ! READ EVENT DAY (INTEGER) 
+C     READ(LNE(12:13),'(I2)')   IHR      ! READ EVENT HOUR (INTEGER) 
+C     READ(LNE(15:16),'(I2)')   IMI      ! READ EVENT MINUTE (INTEGER) 
+C     READ(LNE(18:22),'(F5.2)') SEC0     ! READ EVENT SECOND (REAL) 
+      READ(LNE(23:31),'(F9.4)') FLA      ! READ EVENT LATITUDE (REAL) 
+      READ(LNE(32:41),'(F10.4)')FLO      ! READ EVENT LONGITUDE(REAL)
+      READ(LNE(44:49),'(F6.2)') DEP      ! READ EVENT DEOTH (REAL)
+      READ(LNE(50:53),'(F4.1)') FMAG     ! READ EVENT MAGNITUDE (REAL)
+      READ(LNE(69:71),'(I3)')   LAYR     ! READ EVENT LAYER
+      IF(FMAG .LT. EMGMIN)                     GOTO 100 ! SKIP EVENTS WITH MAGNITUDE < MIN MAG
+      IF(FLA .LT. ELAMIN .OR. FLA .GT. ELAMAX) GOTO 100 ! SKIP EVENTS OUTSIDE LAT RANGE (IF PRESENT)
+      IF(FLO .LT. ELOMIN .OR. FLO .GT. ELOMAX) GOTO 100 ! SKIP EVENTS OUTSIDE LON RANGE (IF PRESENT)
+      IF(DEP .LT. DEPMIN .OR. DEP .GE. DEPMAX) GOTO 100 ! SKIP DEPTH OUT OF RANGE
+C     IF(FLA .GT. 1.0 .AND. FLO .GT. 101.0) GOTO 100 ! SKIP EVENT IN UNLIKELY LOCATION IN PENINSULAR MALAYSIA
+C
+      JPS   = 0                          ! P/S DATA COUNTER FOR EACH EVENT  
+  105 READ(3,'(A85)',END=900)LNS         ! STN ARRIVAL LINE      
+      STA  = LNS(1:5)                    ! EXTRACT STN CODE
+      IF(STA .EQ. ' ') GOTO 109          ! STATION ENDS, AGRREGATE ARRIVALS
+      PHAS  = LNS(21:23)                 ! EXTRACT PHASE LETTERS (P/S)
+C     READ(LNS(7:8),'(I2)')      JHR     ! P/S HOUR
+C     READ(LNS(10:11),'(I2)')    JMI     ! P/S MINUTES
+C     READ(LNS(13:17),'(F5.2)')  SEC1    ! P/S SECONDS
+      READ(LNS(19:20),'(I2)')    KPS     ! P/S PHASE NUMBER
+      READ(LNS(27:33),'(F7.2)')  TT2     ! P/S TRAVELTIME(S)
+      READ(LNS(34:41),'(F8.2)')  DXD2    ! EPICENTRAL DIST(CALCULATED)
+      READ(LNS(42:49),'(F8.2)')  DXD1    ! EPICENTRAL DIST  (REPORTED)
+      READ(LNS(50:55),'(F6.2)')  RES2    ! RESIDUAL       (CALCULATED)
+      READ(LNS(56:61),'(F6.2)')  RES1    ! RESDIUAL         (REPORTED)
+      READ(LNS(62:68),'(F7.2)')  BAZ2    ! BACK-AZIMUTH   (CALCULATED)
+      READ(LNS(71:78),'(A8)')    ARID    ! ARRIVAL ID
+      READ(LNS(79:85),'(I7)')    KSTN    ! STN POSITION
+C
+      JPS   = JPS + 1                    ! COUNT P/S IN EVENT
+C      
+C----SELECT EVENTS WITH 1 OR MORE ARRIVAL TIME      
+      IF (JPS .EQ. 1)THEN
+      I        = I+1                     ! EVENT COUNTER (BOTH NON-USEFUL)
+      EQID(I)  = EVID                    ! PARSE EVENT ID  (WHEN ARRIVAL IS 1)
+      ELAT(I)  = FLA                     ! PARSE EVENT LAT (WHEN ARRIVAL IS 1)
+      ELON(I)  = FLO                     ! PARSE EVENT LON        "
+      EDEP(I)  = DEP                     ! PARSE EVENT DEPTH      "
+C      ESEC(I)  = SEC0                    ! PARSE ARRIVAL TIME (SECONDS VALUE)
+      EMAG(I)  = FMAG                    ! PARSE EVENT MAGNITUDE  "
+      LAYS(I)  = LAYR                    ! PARSE SOURCE LAYER NUMBER                 
+C     DVAR(I)  =-R0*LOG((R0-DEP)/R0)     ! OBTAIN DEPTH VARIABLE            (IF REQUIRED)
+C     VTF(I)   = R0/(R0-DEP)             ! OBTAIN VELOCITY TRANSFORM FACTOR (IF REQUIRED) 
+      ENDIF
+C--          
+C-- OBTAIN MIN AND MAX VALUES OF EVENT LAT, LON & DEP      
+      IF(I .EQ. 1)THEN                   ! GET LAT,LON & DEP OF 1ST EVENT    
+      ELAT_MIN = FLA      
+      ELAT_MAX = FLA
+      ELON_MIN = FLO
+      ELON_MAX = FLO
+      DEP_MIN  = DEP
+      DEP_MAX  = DEP
+      FMAG_MIN = FMAG
+      FMAG_MAX = FMAG
+      ELSEIF(I .GT. 1) THEN              ! OBTAIN MIN & MAX VALUES
+      IF(ELAT_MIN .GT. FLA) ELAT_MIN = FLA
+      IF(ELAT_MAX .LE. FLA) ELAT_MAX = FLA
+      IF(ELON_MIN .GT. FLO) ELON_MIN = FLO
+      IF(ELON_MAX .LE. FLO) ELON_MAX = FLO
+      IF(DEP_MIN .GT. DEP) DEP_MIN = DEP
+      IF(DEP_MAX .LE. DEP) DEP_MAX = DEP
+      IF(FMAG_MIN .GT. FMAG) FMAG_MIN = FMAG
+      IF(FMAG_MAX .LE. FMAG) FMAG_MAX = FMAG
+      ENDIF
+C   
+      NE    = I                          ! PARSE EVENT COUNTER
+      JDAT  = JPS                        ! PARSE ARRIVAL COUNT (P/S)
+      JSTN  = KSTN                       ! PARSE STN POSITION
+      DXDC  = DXD2                       ! PARSE EPICENTRAL DISTANCE   (CALCULATED)
+      BZMC  = BAZ2                       ! PARSE BACK-AZIMUTH          (CALCULATED)
+      IDPS  = KPS                        ! PARSE P/S ARRIVAL PHASE NUMBER(REPORTED)
+C     TIMR  = TT2                        ! PARSE TRAVELTIME              (REPORTED)
+C     RSR   = RES1                       ! PARSE RESIDUAL                (REPORTED)
+C     DXDR  = DXD1                       ! PARSE EPICENTRAL DISTANCE     (REPORTED)
+C     BZMR  = BAZ                        ! PARSE BACK-AZIMUTH            (REPORTED)
+C-----
+      CALL TRAVT                         ! GET TRAVEL-TIME AND RAYPATH 
+       TT3  = RAY(6,NPT)                 ! EXTRACT P/S  TRAVELTIME 
+C      VSOS  = RAY(4,1)                  ! EXTRACT P- VEL AT SOURCE
+C INTRODUCE RANDOM ERROR (RERR) GIVEN STANDARD DEVIATION (STDV)
+      IF(JPTB .EQ. 1)THEN        
+      STDE  = STDV
+      BZZ   = BAZ2
+      CALL RAND_ERR(STDE,BZZ,RERR)     
+      RAY(6,NPT) = TT3 + RERR            ! ADD ERROR TO TRAVELTIME
+C      WRITE(50,'(3F8.3)')TT3,RERR,RAY(6,NPT)
+      ENDIF    
+!--------------------------------------------
+! USE ONLY SELECTED PHASE (MPS=1) FOR P AND (MPS=2) FOR S
+      CALL STN_CORD(EVID,STA,ST1,ST2,ST3,MSTN) 
+      IF(MPS .EQ. 1 .AND. KPS .GT. 10)THEN
+      NAS   = NAS + 1                    ! COUNT S- ARRIVALS
+      JPS   = JPS - 1                    ! REDUCE COUNT BY 1
+      GOTO 105                           ! SKIP S- (P- ONLY FOR INVERSION)
+      ELSEIF(MPS .EQ. 2 .AND. KPS .LT. 10)THEN
+      NAP   = NAP + 1                    ! COUNT P- ARRIVALS
+      JPS   = JPS - 1                    ! REDUCE COUNT BY 1
+      GOTO 105                           ! SKIP P- (S- ONLY FOR INVERSION)
+      ENDIF      
+!                
+      NDAT  = NDAT + 1                   ! COUNT NUMBER OF DATA ACTUALLY USED
+      IF(MPS .EQ. 1 .AND. KPS .LT. 10)NAP = NDAT  
+      IF(MPS .EQ. 2 .AND. KPS .GT. 10)NAS = NDAT 
+! 
+! OBTAIN MIN AND MAX VALUES OF STATION LAT, LON & DEP      
+      IF(NDAT .EQ. 1)THEN ! GET FOR 1ST EVENT
+      SLAT_MIN = ST1    
+      SLAT_MAX = ST1
+      SLON_MIN = ST2
+      SLON_MAX = ST2
+      SELV_MIN = ST3
+      SELV_MAX = ST3
+      ELSEIF(NDAT .GT. 1)THEN                     ! COMPARE WITH LATER EVENTS
+      IF(SLAT_MIN .GT. ST1) SLAT_MIN = ST1
+      IF(SLAT_MAX .LE. ST1) SLAT_MAX = ST1
+      IF(SLON_MIN .GT. ST2) SLON_MIN = ST2
+      IF(SLON_MAX .LE. ST2) SLON_MAX = ST2
+      IF(SELV_MIN .GT. ST3) SELV_MIN = ST3
+      IF(SELV_MAX .LE. ST3) SELV_MAX = ST3
+      ENDIF      
+C     
+! COUNT EVENTS THAT ARE ACTUALLY CONSIDERED
+      IF(JPS .EQ. 1)IEV = IEV +1   
+        
+! PARSE ARRIVAL DETAILS FOR UAS LATER 
+       LSL(JPS) = LNS(1:25)
+       TTC(JPS) = TT2
+       XD2(JPS) = DXD2
+       XD1(JPS) = DXD1
+       RS2(JPS) = RES2 
+       RS1(JPS) = RES1
+       BZ2(JPS) = BAZ2
+       ARV(JPS) = ARID
+       KST(JPS) = KSTN
+
+C    PARSE TO GLOBAL FOR RESIDUAL ANALYSIS     
+      STNA(NDAT) = STA
+      JSTC(NDAT) = KSTN
+      BAZC(NDAT) = BZMC
+      RESC(NDAT) = RES2
+      RESR(NDAT) = RES1  
+C   WRITE TO RESIDUAL FILE (A12-RESIDUALS)       
+      WRITE(12,'(A5,2(1X,A8),3F8.2,2F6.2,I8)')   
+     & STA,ARID,EVID,DEP,DXDC,BZMC,RES2,RES1,NDAT
+C    
+C     WRITE RAYPATH (P-FIRST ARRIVAL)     
+      IF(JPATH1 .EQ. 1 .AND. IDPS .LT. 10)THEN   ! SKIP WRITING RAYPATH & EVENT FOR DEPTH > DEPMAX BUT USE FOR INVERSION      
+      DO 310 K = 1,NPT                           ! SOURCE --> STN
+      Z10  = -RAY(3,K)/5                         ! DEPTH/10 FOR PLOT ONLY
+      IF(LBD .EQ. 0)THEN                         ! SEPARATE RAYPATH FOR DIRECT WAVE
+      WRITE(17,'(A5,F9.4,F10.4,F7.2,F6.2,3F7.2,4I3,2F7.2,I4,1X,A8,I6)')
+     & STA,(RAY(J,K), J=1,7),LBD,JL(K),KL(K),JSG,DEP,DXD,K,EVID,NDAT
+      ELSE                                       ! SEPARATE RAYPATH FOR REFRCTED WAVE
+      WRITE(18,'(A5,F9.4,F10.4,F7.2,F6.2,3F7.2,4I3,2F7.2,I4,1X,A8,I6)')
+     & STA,(RAY(J,K), J=1,7),LBD,JL(K),KL(K),JSG,DEP,DXD,K,EVID,NDAT
+      ENDIF        
+  310 CONTINUE 
+      ENDIF         
+C----
+      IF(MPS .LE. 2)CALL DERIVATIVES(1)          ! GET TRAVTIME DERIVATIVES MPS=1 OR 2
+C----  
+      GOTO 105                                   ! RETURN TO STN WITH ARRIVAL TIME
+
+109   IF(JPS .GT. 0)THEN                 ! NO. OF ARV IS KNOWN
+      JEV  = JEV + 1                     ! COUNTER FOR NO. OF EVENTS USED      
+      WRITE(6,'(A53,1X,A3,1X,A8,2I4,I7)')LNE,CMAG,EVID,LAYS(I),NAR,JEV        
+      WRITE(10,'(A53,1X,A3,1X,A9,2I4,I7)')LNE,CMAG,EVID,LAYS(I),NAR,JEV        
+C      WRITE(43,'(/A42,A33,1X,A6,I8/A53,1X,A3,1X,A9,2I4/A49,A36)')
+C     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(deg)  LON(deg)',
+C     & 'Z(km) MAG      EVENT-ID LYR NAR',DSOS,JEV,
+C     & LNE,CMAG,EVID,LAYS(I),JPS,
+C     & 'STN   HR:MI: SEC   ID       TC(s)  XC(km)  XR(km)', 
+C     & 'RESC  RESR   BAZC     ArvID   JSTN'    
+C      DO 110 JO  = 1,JPS
+C      WRITE(43,'(A25,3F8.2,2F6.2,F7.2,2X,A8,I7,I4)')
+C     & LSL(JO),TTC(JO),XD2(JO),XD1(JO),RS2(JO),RS1(JO),
+C     & BZ2(JO),ARV(JO),KST(JO),JO
+C  110 CONTINUE
+      ENDIF
+      GOTO 100                           ! GO TO NEXT EVENT
+     
+  900 CONTINUE  
+      NEQS  = IEV                          ! PARSE NO. OF USEFUL EVENTS
+C     WRITE THE LAST EVENT AND ARRIVALS
+      WRITE(6,'(A53,1X,A3,1X,A8,2I4,I7)')LNE,CMAG,EVID,LAYS(I),NAR,IEV        
+      WRITE(10,'(A53,1X,A3,1X,A9,2I4,I7)')LNE,CMAG,EVID,LAYS(I),NAR,IEV        
+C      WRITE(43,'(/A42,A33,1X,A6,I8/A53,1X,A3,1X,A9,2I4/A49,A36)')
+C     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(deg)  LON(deg)',
+C     & 'Z(km) MAG      EVENT-ID LYR NAR',DSOS,IEV,
+C     & LNE,CMAG,EVID,LAYS(I),JPS,
+C     & 'STN   HR:MI: SEC   ID       TC(s)  XC(km)  XR(km)', 
+C     & 'RESC  RESR   BAZC     ArvID   JSTN'    
+C      DO 120 JO  = 1,JPS
+C      WRITE(43,'(A25,3F8.2,2F6.2,F7.2,2X,A8,I7,I4)')
+C     & LSL(JO),TTC(JO),XD2(JO),XD1(JO),RS2(JO),RS1(JO),
+C     & BZ2(JO),ARV(JO),KST(JO),JO
+C  120 CONTINUE
+      CLOSE(3)  
+C      CLOSE(43)
+      RETURN
+      END SUBROUTINE FORWARD
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE DERIVATIVES(IO)
+      INCLUDE "A_PARAM_MALAY.INC"
+!     MODIFIED BY: OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     ORIGINAL CODES FROM ZHAO DAPENG (1991)
+!                 (1)TO CALCULATE TRAVELTIME DERIVATIVES
+!     CALLED BY   : FORWARD, RELOCATE
+!     SUBROUTINES : VEL3D
+!------------------------------------------------------------------------
+!
+      DIMENSION  DTM(MSTEP),NDM(MSTEP) 
+      DIMENSION  INX(8),INY(24),INZ(24)
+      DATA INZ/1,3,5,7,2,4,6,8,1,2,5,6,3,4,7,8,1,2,3,4,5,6,7,8/
+C----      
+C     NDAT     = NDAT + 1                ! COUNT DATA FOR ALL EVENTS
+      NUMB     = 0   
+      SUMDT    = 0.0                     ! SUM OF DT
+C----         
+C     NP1      = NPT-1                   ! NUMBER OF POINTS ALONG RAYPATH BTW SOURCE AND RECEIVER
+      VE       = RAY(4,1)                ! VEL AT SOURCE
+      TT       = RAY(6,NPT)              ! TRAVEL-TIME SOURE --> STN (CALCULATED)
+      IPS      = 1                       ! PHASE ID NUMBER (1) FOR P- (DEFAULT)
+      IF(IDPS .GT. 10) IPS = 2           ! PHASE ID NUMBER (2) FOR S- 
+      AZ       = BAZC(NDAT)*DEG          ! BACK-AZIMUTH (RADIANS)
+      COLAT    = D90-RAY(1,1)*DEG        ! EVENT CO-LAT (RADIANS)     
+      DEP      = RAY(3,1)                ! DEPTH AT SOURCE
+      DEP2     = RAY(3,2)                ! DEPTH AT NEXT POINT
+      SG       = RAY(8,2)                ! RAY SEGMENT AT NEXT POINT
+      ANG      = RAY(7,1)*DEG            ! TAKEOFF ANG AT SOURCE
+      XD1      = SIN(ANG)*SG             ! HORIZONTAL DIST BTW SOURCE & NEXT POINT
+      STA      = STNA(NDAT)              ! STN NAME
+C----
+      DES      = XD1*(1.0-DEP/R0)     
+      DDEP     = DEP2 - DEP              ! DIFF IN DEP BTW SOURCE & NEXT POINT
+      ABDEP    = ABS(DDEP)               ! ABSOLUTE DIFF IN DEP BTW SOURCE & NEXT POINT
+      IF(ABDEP .LT. EPS) DDEP = 1.0      ! CONSTRAIN DEP DIFF IF TOO SMALL TO 1.0
+      TH       = ATAN2(DES,DDEP)
+      DTDDEL   = SIN(TH)*(R0-DEP)/VE
+      DTDR     = COS(TH)/VE
+      DTVAL(JDAT,1) = 1.0                      ! DTVAL(MEQ,4)
+      DTVAL(JDAT,2) = DTDDEL*COS(AZ)*0.01      ! JDAT = JTH STN OF THE ITH EVENT
+      DTVAL(JDAT,3) = -DTDDEL*SIN(AZ)*SIN(COLAT)*0.01
+      DTVAL(JDAT,4) = -DTDR
+      RESID(JDAT)   = RESC(NDAT)               ! PARSE RESIDUAL JTH STN OF THE ITH EVENT
+      ABRES         = ABS(RESID(JDAT))         ! ABSOLUTE RESIDUAL VALUE
+C      
+      WTT(JDAT)     = 0.0                      ! WEIGHTING FACTOR FOR THE JTH STN OF THE ITH EVENT
+C   WEIGHTING WTT(MEQ) FOR P- RESIDUALS
+      IF(ABRES .LT. 1.0) WTT(JDAT) = 1.0                          ! FULL WEIGHT
+      IF(ABRES .GE. 1.0 .AND. ABRES .LE. RESMAX) WTT(JDAT) = 0.50 ! 0.50 WEIGHT       
+C   WEIGHTING WTT(MEQ) FOR S- RESIDUALS
+      IF(MPS .EQ. 2) THEN
+      IF(ABRES .LT. 1.0) WTT(JDAT) = 0.5                          ! FULL WEIGHT
+      IF(ABRES .GE. 2.0 .AND. ABRES .LE. RESMAX) WTT(JDAT) = 0.25 ! 0.25 WEIGHT
+      ENDIF
+      IF(IO .EQ. 2)RETURN                      ! CALLED BY RELOCATE
+C------------------------------------------------------------        
+C  TRAVEL TIME DERIVATIVES WITH RESPECT TO VELOCITY PARAMETERS
+C   LOOP OVER ALL SEGMENTS COMPRISING THE RAY PATH
+C
+      DO 5 I = 1,MSTEP           ! MAX POINTS SEPARATED BY STEPL ALONG RAYPATH 
+      DTM(I)  = 0.0
+      NDM(I)  = 0                !
+ 5    CONTINUE
+C
+      DO 100 K9 = 1,NPT          ! NUMBER OF POINTS IN RAY-PATH SOURCE --> STN
+      IJMN   = 0
+      K1     = NPT-K9+1          ! REVERSE STN --> SOURCE
+      K2     = K1+1              ! NEXT POINT
+      LAY    = JL(K1)            ! LYR AT POINT(K1)
+      FLA    = RAY(1,K1)         ! EXTRACT LAT AT POINT(K1) 
+      FLO    = RAY(2,K1)         ! EXTRACT LON AT POINT(K1)
+      Z0     = RAY(3,K1)         ! EXTRACT DEP AT POINT(K1)
+      RSG    = RAY(8,K2)         ! EXTRACT RAY-LENGTH AT NEXT POINT
+      IF(K1 .EQ. NPT) RSG = 0    ! RAY-LENGTH AT SOURCE IS ZERO
+C  LOOP OVER ALL SUBSEGMENTS
+C      DO 200 JK = 1,J0          ! POINT(I) --> POINT(K2)      
+      CALL VEL3D(FLA,FLO,Z0,LAY,IPS,V3) ! GET 3D VELOCITY AT ALL POINTS FROM STN --> SOURCE
+      DT     = RSG/V3            ! OBTAIN TRAVELTIME OF EACH SEGMENT
+      SUMDT  = SUMDT + DT        ! SUM UP TRAVELTIMES FOR ALL SEGMENTS BTW STN AND SOURCE
+C      WRITE(50,'(A5,2F10.4,3F7.2,F7.1,I3,1X,A8,2I8)')
+C     & STA,FLA,FLO,Z0,SUMDT,V3,DEP,LAY,EVID,NDAT,JDAT
+C     
+C---------------------------------------------
+C      CALL NODO(MX,MY,MZ,KX,KY,KZ,INY,IND)
+      DO 101 JF = 1,24
+  101 INY(JF)  = 0
+      IF(KX .EQ. 1 .OR. KX .EQ. MX)GOTO 10
+      IF(KY .EQ. 1 .OR. KY .EQ. MY)GOTO 20
+      IF(KZ .EQ. 1 .OR. KZ .EQ. MZ)GOTO 30
+      IND    = 0
+      GOTO 109
+  10  IF(KX .NE. 1)          GOTO 11
+      DO 102 JF = 1,4
+ 102  INY(JF)  = INZ(JF)
+  11  IF(KX .NE. MX)         GOTO 20
+      DO 103 JF = 5,8
+ 103  INY(JF)  = INZ(JF)
+  20  IF(KY .NE. 1)          GOTO 21
+      DO 104 JF = 9,12
+ 104  INY(JF)  = INZ(JF)
+  21  IF(KY .NE. MY)         GOTO 30
+      DO 105 JF = 13,16
+ 105  INY(JF)  = INZ(JF)
+  30  IF(KZ .NE. 1)          GOTO 31
+      DO 106 JF = 17,20
+ 106  INY(JF)  = INZ(JF)
+  31  IF(KZ .NE. MZ)         GOTO 40
+      DO 107 JF = 21,24
+ 107  INY(JF)  = INZ(JF)
+  40  IND     = 1
+ 109  CONTINUE
+C------------------------------------------     
+C  NODES WITH NON-ZERO WEIGHT
+      INX(1)   = KX-1 + MX2*(KY-2)+ MXY*(KZ-2)
+      INX(2)   = INX(1)+1
+      INX(3)   = INX(1)+MX2
+      INX(4)   = INX(3)+1
+      INX(5)   = INX(1)+MXY
+      INX(6)   = INX(5)+1
+      INX(7)   = INX(5)+MX2
+      INX(8)   = INX(7)+1
+C  ACCUMULATE MODEL PARTIAL DERIVATIVES
+      DO 110 KK = 1,2
+      KK1     = KK-1
+      DO 110 JJ = 1,2
+      JJ1     = JJ-1
+      DO 110 II = 1,2
+      IJK     = II + 2*JJ1 + 4*KK1
+      IF(IND .EQ. 0)        GOTO 125
+      DO 120 KZ = 1,24
+      IF(IJK .EQ. INY(KZ))  GOTO 110
+120   CONTINUE
+125   II1     = II-1
+      INI     = IJMN + INX(IJK)
+      L       = KX + II1
+      M       = KY + JJ1
+      N       = KZ + KK1
+      VIJK    = VE0(L,M,N)
+      DTV     = DT *WV(IJK)*VIJK/V3
+C----------------------------------------------------     
+C     CALL ONERAY(INI,DTV)
+      NXB     = MAX0(1,NUMB)           ! MAX0(I1,I2,...) - RETURNS THE MAXIMUM OF I1,I2, ... 
+      DO 130  IJ  = 1,NXB              ! AS AN INTEGER (ARGUMENTS ARE INTEGER)
+      IF(INI .EQ. NDM(IJ))  GOTO 135
+130   CONTINUE
+      NUMB     = NUMB + 1
+      NDM(NUMB)= INI
+      DTM(NUMB)= DTV
+      GOTO 110
+135   DTM(IJ)  = DTM(IJ)+ DTV
+C---------------------------------------------------   
+110   CONTINUE
+100   CONTINUE
+C
+      WETT    = WTT(JDAT)             ! WEIGHTING FACTOR FOR STN RESIDUALS (1 = FULL WEIGHT)
+      NUMC    = 0                     ! S/N OF NODES WITH NON-ZERO ELEMENTS PER RAY
+      DO 200  I = 1,NUMB                 
+      DTMI    = DTM(I)                ! TIME-SEGMENT DERIVATIVES
+      IF(DTMI .LT. EPS)     GOTO 200  ! AVOID SMALL TIME-SEGMENT DERIVATIVES
+      NUMC    = NUMC+1                ! COUNT NUMBER OF OBSERVATIONS (PER RAY)
+      NTOPTS  = NTOPTS+1              ! COUNT TOTAL NUMBER OF OBSERVATIONS (ALL RAYS)
+      K       = NDM(I)                ! COUNT ALL ELEMENTS (IN MATRIX A)
+      JHIT(K) = JHIT(K)+1             ! COUNT NODES WITH NON-ZERO WEIGHT (IN MATRIX A)
+      AXA(NTOPTS) = DTMI*WETT         ! WEIGHTED TIME-SEGMENT DERIVATIVES
+      JAXA(NTOPTS)= K                 ! PARSE ALL ELEMENTS (IN MATRIX A)
+200   CONTINUE
+      NAXA(NDAT) = NUMC               ! PARSE TOTAL NUMBER OF OBSERVATIONS (PER RAY)
+      RESWT(NDAT)= RESID(JDAT)*WETT   ! WEIGHTED RESIDUAL FOR STN TRAVEL-TIME (ALL ARRIVALS IN DATASET)
+C      
+      RETURN
+      END SUBROUTINE DERIVATIVES
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE VEL1D(Z0,LAY,IPS,VV)
+      INCLUDE "A_PARAM_MALAY.INC"
+!    CODED BY: OSAGIE ABEL UYIMWEN 
+!              (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     TO GET 1-D VELOCITY 
+!     INPUT  : Z0 (DEPTH)
+!            : LAY (SOURCE LAYER NUMBER)
+!            : IPS (WAVE TYPE ID. 1=P, 2=S)
+!
+!     OUTPUT : VV (P/S VELOCITY OF LAYER)
+C-----
+       IF(Z0 .GT. BV(NL))  RETURN               ! DUMMY
+C       VV = VP(LAY)
+C       IF(IPS .GT. 10) VV = VS(LAY)
+      IF (Z0 .LE. BV(MOH))THEN                  ! Z0 < MOHO BV
+      VV = VP(LAY)
+      IF(IPS .EQ. 2) VV = VS(LAY)
+      ELSEIF (Z0 .GT. BV(MOH))THEN              ! Z0 > MOHO BV
+      DO 102 I = MOH,NL-1
+      J  = I+1-MOH                              !  J = COUNT FROM MOHO BOUNDARY DOWNWARDS
+      J1 = I+2-MOH                              ! J1 = J BOUNDARY + 1
+      H1 = BV(J)
+      H2 = BV(J1)
+      IF(Z0 .GE. H1 .AND. Z0 .LT. H2) GOTO 103  !Z0 IS BTW SUCCESSIVE BDR
+102   CONTINUE
+103   CONTINUE
+      H12 = (Z0-H1)/(H2-H1)                     ! PROXIMITY RATIO TO UPP AND LOWER BDR
+      VV  = (VP(J1)-VP(J))*H12+VP(J)            ! ESTIMATE P-VEL BASED ON PROVIMITY RATIO
+      IF(IPS.EQ.2)VV =(VS(J1)-VS(J))*H12+VS(J)  ! ESTIMATE S-VEL BASED ON PROVIMITY RATIO
+      ENDIF
+      RETURN
+      END SUBROUTINE VEL1D
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE VEL3D(QX,QY,QZ,LAY,IPS,V3)
+      INCLUDE "A_PARAM_MALAY.INC"
+!     MODIFIED BY: OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     ORIGINAL CODES FROM ZHAO DAPENG (1991)
+!              (1)TO OBTAIN VELOCITY AT A POINT FROM INTERPOLATING 
+!                 THE 8 VERTECES (WITH KNOWN VELOCITIES) AROUND THE POINT 
+!     CALLED BY: DERIVATIVES
+!     CAN BE CALLED BY: PTUB
+!     INPUT  : QX,QY,QZ,LAY,IPS
+!     OUTPUT : V3
+!
+      CALL LIMIT(GX(1),GX(MX),QX) 
+      CALL LIMIT(GY(1),GY(MY),QY)
+      CALL LIMIT(GZ(1),GZ(MZ),QZ)
+C   
+      JX    = INT(QX*100.0 + AAX)     
+      JY    = INT(QY*100.0 + AAY)
+      JZ    = INT(QZ + AAZ) 
+C
+      KX    = JAX(JX)                 ! FOR THE POINT Q(QX,QY,QZ),
+      KY    = JAY(JY)                 ! KX,KY,KZ ARE PARAMETERS
+      KZ    = JAZ(JZ)                 ! TO REPRESENT THE 8 GRID NODES AROUND POINT Q
+C      
+!     WE DEFINE
+      KX1   = KX+1                    ! IP1S
+      KY1   = KY+1                    ! JP1
+      KZ1   = KZ+1                    ! KP1
+      DKX   = GX(KX1)-GX(KX)          ! LENGTH IN LAT AXIS
+      DKY   = GY(KY1)-GY(KY)          ! LENGTH IN LON AXIS
+      DKZ   = GZ(KZ1)-GZ(KZ)          ! LENGTH IN DEP AXIS
+      FX0   = (QX-GX(KX))/DKX         ! 
+      FY0   = (QY-GY(KY))/DKY         ! 
+      FZ0   = (QZ-GZ(KZ))/DKZ         ! 
+      FX1   = 1.0-FX0
+      FY1   = 1.0-FY0
+      FZ1   = 1.0-FZ0
+      WV(1) = FX1*FY1*FZ1             ! WV(I) DISTANT WEIGHT.
+      WV(2) = FX0*FY1*FZ1             ! WV(I) INCREASES WITH PROXIMITY TO AI
+      WV(3) = FX1*FY0*FZ1             ! 0 < WV(I) < 1  
+      WV(4) = FX0*FY0*FZ1           
+      WV(5) = FX1*FY1*FZ0
+      WV(6) = FX0*FY1*FZ0
+      WV(7) = FX1*FY0*FZ0
+      WV(8) = FX0*FY0*FZ0
+C
+C    DV1(I) IS VELOCITY AT GRID AI AROUND Q                
+      PQ  = WV(1)*DV1(KX,KY,KZ)  + WV(2)*DV1(KX1,KY,KZ)
+     &    + WV(3)*DV1(KX,KY1,KZ) + WV(4)*DV1(KX1,KY1,KZ)
+     &    + WV(5)*DV1(KX,KY,KZ1) + WV(6)*DV1(KX1,KY,KZ1)
+     &    + WV(7)*DV1(KX,KY1,KZ1)+ WV(8)*DV1(KX1,KY1,KZ1)
+C
+      CALL VEL1D(QZ,LAY,IPS,V1)      
+      V3     = V1*(1.0 + 0.01*PQ)    ! VELOCITY AT POINT P
+C      IF(IPS .NE. MPS) V3 = V1
+      RETURN
+      END SUBROUTINE VEL3D
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE TRAVT
+      INCLUDE 'A_PARAM_MALAY.INC'
+!     CODED BY    : OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     TO OBTAIN   : FIRST ARRIVAL RAYPATHS,TRAVELTIMES 
+!                   AND PHASE FOR DIRECT/REFRACTED RAYS
+!     SUBROUTINES : TRAYD,TRAYR & WAVE_TYPE
+!      
+      CALL TRAYD
+      CALL TRAYR
+      DEP      = EDEP(NE)
+      DIST     = DXDC
+      CALL WAVE_TYPE(DEP,DIST,MPS,KPS) ! GET P/S PHASE NUMBERS(KPS)        
+      IF(DEP .GT. BV(MOH))THEN         ! SKIP  REFRACTED WAVE COMPUTATION   
+      NPT   = NPD                      ! PARSE NUMBER OF POINTS S --> STN
+      JSG   = NSD                      ! PARSE NUMBER OF SEGMENTS S --> STN
+      LBD   = JBD                      ! PARSE BDR OF REFRACTION (0 FOR DIRECT WAVE)
+      DO 110 J = 1,NPT    
+      JL(J) = JLD(J)                   ! PARSE LYR OF THE J-TH POINT ALONG RAY-PATH (S --> STN) 
+      KL(J) = KLD(J)                   ! PARSE ORDER OF POINT (S --> STN) 
+      RAY(1:8,J)= RFD(1:8,J)           ! PARSE TRAELLING RAY DESCRIBERS
+ 110  CONTINUE 
+      GOTO 301
+      ENDIF
+C----------------------------------------------------------------
+      TD   = RFD(6,NPD)                ! TRAVEL-TIME (DIRECT WAVE)
+      TR0  = RF0(6,NP0)                ! TRAVEL-TIME (REFRACRED WAVE)
+      IF(TD .EQ. 0.0)     TD  = 999.9  ! AVOID ZERO TRAVEL-TIME (DIRECT WAVE)
+      IF(KPS .EQ. 5 )     TD  = 999.9  ! NOT DIRECT WAVE (Pn PHASE) 
+      IF(TR0 .EQ. 0.0)    TR0 = 999.9  ! AVOID ZERO TRAVEL-TIME (REFRACRED WAVE)
+      IF(DEP .GT. BV(MOH))TR0 = 999.9  ! AVOID ZERO TRAVEL-TIME (REFRACRED WAVE) FOER DEPTH> MOHO
+C------
+      TMN  = MIN(TD,TR0)               ! GET MINIMUM TRAVELTIME BTW DIRECT & REFRACTED WAVES
+C------             
+      IF(TMN .EQ. TD)THEN   
+      NPT   = NPD                      ! PARSE NUMBER OF POINTS S --> STN
+      JSG   = NSD                      ! PARSE NUMBER OF SEGMENTS S --> STN
+      LBD   = JBD                      ! PARSE BDR OF REFRACTION (0 FOR DIRECT WAVE)
+      DO 210 J = 1,NPT           
+      JL(J) = JLD(J)                   ! PARSE LYR OF THE J-TH POINT ALONG RAY-PATH (S --> STN) 
+      KL(J) = KLD(J)                   ! PARSE ORDER OF POINT (S --> STN) 
+      RAY(1:8,J)= RFD(1:8,J)           ! PARSE TRAELLING RAY DESCRIBERS
+ 210  CONTINUE
+      ELSEIF(TMN .EQ. TR0)THEN         ! REFRACTED WAVE IS MINIMUM
+      NPT   = NP0                      ! PARSE NUMBER OF POINTS S --> STN
+      JSG   = NS0                      ! PARSE NUMBER OF SEGMENTS S --> STN
+      LBD   = JB0                      ! PARSE BDR OF REFRACTION (0 FOR DIRECT WAVE)
+      DO 220 J = 1,NPT           
+      JL(J) = JL0(J)                   ! PARSE LYR OF THE J-TH POINT ALONG RAY-PATH (S --> STN) 
+      KL(J) = KL0(J)                   ! PARSE ORDER OF POINT (S --> STN) 
+      RAY(1:8,J)= RF0(1:8,J)           ! PARSE TRAELLING RAY DESCRIBERS
+ 220  CONTINUE
+      ENDIF
+C     
+ 301  CONTINUE
+
+      TME  =  RAY(6,NPT)               ! TIME B4 PTB
+      IF(JPTB .EQ. 1)CALL PTUB
+      RETURN
+C      
+      END SUBROUTINE TRAVT
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+
+      SUBROUTINE PTUB
+      INCLUDE "A_PARAM_MALAY.INC"
+!     CODED BY    : OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+C     PERFORMS PERTURBATION ON VEL MODEL AND GETS TRAVEL-TIME
+C     BY CALLING VEL3D WITH PTB IDENTIFIER
+C      
+      TT    = 0.0
+      IPS   = 1                          ! PHASE ID NUMBER (1) FOR P- (DEFAULT)
+      IF(IDPS .GT. 10) IPS = 2           ! PHASE ID NUMBER (2) FOR S- 
+      DO 310 J = 1,NPT           
+      LAY   = JL(J)
+      XLA   = RAY(1,J)
+      XLO   = RAY(2,J)
+      ZD    = RAY(3,J)
+      CALL VEL3D(XLA,XLO,ZD,LAY,IPS,V3) ! GET PTB VEL & TRAVEL-TIME (JD = 1)
+      RAY(4,J) = V3
+      TT    = TT + RAY(8,J)/V3
+      RAY(6,J) = TT
+C      WRITE(50,'(A5,3F7.2,3I3,A6,F7.2)')STA,RAY(3,J),VZ,TT,LBD,J,LAY,EID,TME 
+  310 CONTINUE 
+      RETURN
+      END SUBROUTINE PTUB
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE TRAYD
+      INCLUDE 'A_PARAM_MALAY.INC'
+!     CODED BY    : OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     TO CALCULATE RAYPATH AND TRAVELTIMES FOR UPWARD GOING RAYS
+!     USING TWO-POINT RAY SHOOTING TECHNIQUE BASED ON TAKEOFF ANGLE AT SOURCE (KIM, 2002)
+!     
+!     CALLED BY: TRAVT
+!     SUBROUTINES : DAZXY, CORD
+!
+!------------------------------------------------------------------------
+      REAL*4, DIMENSION(ML)  :: Z,VZ,TK,X,TD,SG,FLA,FLO
+C
+      QLA     = ELAT(NE)                 ! PARSE LAT (DEG)
+      QLO     = ELON(NE)                 ! PARSE LON (DEG)
+      DEP     = EDEP(NE)                 ! DEPTH (KM)
+      LS      = LAYS(NE)                 ! SOURCE LAYER NUMBER
+      VTFN    = R0/(R0-DEP)              ! VEL TRANSFORMATION FACTOR
+      SLA     = SLAT(JSTN)               ! SLAT (DEG)
+      SLO     = SLON(JSTN)               ! SLON (DEG)
+      SEV     = SELV(JSTN)               ! SELV (KM)
+      DIST    = DXDC                     ! PARSE EPICENTRAL DISTANCE
+      IPS     = 1                        ! PHASE ID NUMBER (1) FOR P- (DEFAULT)
+      IF(IDPS .GT. 10) IPS = 2           ! PHASE ID NUMBER (2) FOR S- 
+      BAZ     = BZMC                     ! BACK-AZIMUTH (DEG)
+      AZI     = BAZ*DEG + PI             ! CONVERT TO AZIMUTH (RAD)
+      IF(AZI .GE. 2*PI) AZI = AZI - 2*PI ! CONSTRAIN AZIMUTH WITHIN 2*PI
+C      
+      TKJ     = 0.0
+      DO 101 I = 1,LS
+      LAY   = I
+      Z(I)  = BV(I)
+      BVI   = Z(I)
+      CALL VEL1D(BVI,LAY,IPS,VI)         ! GET 1D VELOCITY
+      VZ(I) = VTFN * VI                  ! MULTIPLY WITH VEL TRANSFORMATION FACTOR
+      TK(I) = BV(I+1)- BV(I)             ! THK OF LAYER (I)
+      IF(I .EQ. 1)THEN
+      Z(I)  = SEV                        ! DEPTH IS STATION ELEVATION
+      TK(I) = BV(I+1)- SEV               ! THK OF LAYER (I)
+      ENDIF
+      IF(DEP .GT. BV(I) .AND. DEP .LE. BV(I+1))TK(I)= DEP-BV(I) 
+      IF(TK(I) .LT. 1.0)THEN             ! S < 1KM CLOSE TO UPPER BDR
+      TKJ   = TK(I)                      ! PARSE THE THK TO TKJ (TO HOLD)
+      TK(I) = 1.0                        ! THK OF LAYER (I)
+      ENDIF
+  101 CONTINUE
+C     
+      VLS   = VZ(LS) 
+      IF(LS .GT. 1)GOTO 109              ! EVENT NOT IN FIRST LAYER
+      N     = 0                          ! GLOBAL COUNTER 
+      TT    = 0.0
+      XD    = 0.0
+      DEP1  = DEP                        ! DEP IS DESTROYED AFTER CALL DAZXY
+      Q1    = QLA                        
+      Q2    = QLO
+      S1    = SLA                       
+      S2    = SLO
+      S3    = SEV                        ! SEV IS DESTROYED AFTER CALL DAZXY
+      CALL DAZXY(1,Q1,Q2,DEP1,S1,S2,S3,SLH,DIS,AZH,XS,YS)  ! GET HYPO DISTANCE SLH
+      HYD   = SLH                        ! PARSE SLH TO HYD
+      ANG   = ACOS(TK(1)/HYD)            ! OBTAIN ANGLE
+      J0    = INT(HYD/STEPL)             ! DIVIDE BEELINE INTO MULTIPLES OF STEP-LENGTH
+      ABB   = 1.0/REAL(J0)               ! OBTAIN INCREMENTAL FACTOR
+      DLA   = (SLA-QLA)*ABB              ! LAT INCREMENTAL FACTOR (DLA)
+      DLO   = (SLO-QLO)*ABB              ! LON INCREMENTAL FACTOR (DLO)
+      DZ0   = (SEV-DEP)*ABB              ! DEP INCREMENTAL FACTOR (DZ0)
+C-----      
+      DO 103 K  = 1,J0+1                 ! S --> STN 
+      J     = K-1                        ! NUMBER OF STEP WITHIN RAY-SEGMENT
+      N     = N+1                        ! GLOBAL COUNTER 
+      QLAJ  = QLA+DLA*J                  ! INCREASE LAT VALUE BY DLA FROM S --> STN 
+      QLOJ  = QLO+DLO*J                  ! INCREASE LON VALUE BY DLO FROM S --> STN 
+      QZOJ  = DEP+DZ0*J                  ! INCREASE DEP VALUE BY DZ0 FROM S --> STN 
+      R2    = HYD*ABB                    ! BEELINE INCREMENTAL FACTOR (R2)
+      XD    = XD + DIST*ABB              ! ADD UP HORIZONTAL DISTANCES (S --> STN) 
+      TT    = TT + HYD*ABB/VLS           ! ADD UP TRAVEL-TIMES (S --> STN) 
+      AN    = ANG/DEG                    ! TAKE-OFF ANGLE (DEG)
+      IF(K .EQ. 1)THEN
+      TT    = 0.0                        ! TRAVELTIME AT HYPOCENTER IS ZERO
+      XD    = 0.0                        ! DISTANCE AT HYPOCENTER IS ZERO
+      ENDIF
+C      
+C     PARSE TO GLOBAL FOR EVENT IN LAYER = 1
+      RFD(1,N) = QLAJ
+      RFD(2,N) = QLOJ
+      RFD(3,N) = QZOJ
+      RFD(4,N) = VLS
+      RFD(5,N) = XD
+      RFD(6,N) = TT
+      RFD(7,N) = AN 
+      RFD(8,N) = R2       
+      JLD(N)   = 1                       ! LYR OF THE I-TH POINT ALONG RAY-PATH
+      KLD(N)   = 1                       ! NO. OF STEP WITHIN RAY-SEGMENT
+      NPD      = N                       ! GLOBAL NO. OF POINTS (STEP NOT USED)
+      NSD      = LS                      ! GLOBAL NO. OF SEGMENTS
+      JBD      = 0                       ! GLOBAL BDR OF REFRACTION 
+C  WRITE RAY PATH (P-WAVES ONLY)
+      IF(JPATH2 .EQ. 1)                  
+     & WRITE(19,'(A5,2F9.4,F7.2,F6.2,3F7.2,4I3,3F7.2,I4,1X,A8)')
+     & STA,(RFD(M,N), M=1,7),JBD,JLD(N),KLD(N),NSD,DEP,DIST,BAZ,N,EVID
+C      WRITE(50,'(A5,2F9.4,5F8.2,I4,1X,A8)')
+C     & STA,(RFD(M,N), M=1,6),DIST,N,EVID
+  103 CONTINUE
+      RETURN
+
+C START THE PROCESS OF OBTAINING TAKEOFF ANG
+  109 CONTINUE
+      DX    = DIST
+      XH    = 0.0
+      SGL   = 0.0
+      SV    = 0.0    
+      ANG   = ATAN(DX/DEP)              ! ASSUMING THERE IS AN AVERAGE VEL (VBAR)
+C     ANG   = ACOS(DEP/SL)              ! ASSUMING THERE IS AN AVERAGE VEL (VBAR)
+C     P0    = SIN(ANG)/VLS              ! RAY PARAMETER OF S 
+      DO 110 I = 1,LS
+      SANG = SIN(ANG)*VZ(I)/VLS         ! SINE OF TAKEOFF ANG IN LAYER (I)
+      IF(SANG .GE. 1.0) GOTO 110
+      AA   = ASIN(SANG) 
+C      IF(TKJ .GT. 0.)WRITE(50,'(A5,3F8.2,I6)')STA,DEP,Z(I),TK(I),EID 
+      CANG = SQRT(1.0 - SANG**2.0)      ! COS OF TAKEOFF ANG IN LAYER (I)
+      XH   = XH + TK(I)*SANG/CANG       ! DELTA @ BEELINE ANGLE XH < DX
+C      U0    = 1/VZ(I)                  ! SLOWNESS
+C      XH    = XH+ TK(I)/(U0*U0-P0*P0)**0.5 *P0   
+      SI   = TK(I)/COS(AA)  
+      SVI  = SI * VZ(I)
+      SGL  = SGL + SI
+      SV   = SV  + SVI
+  110 CONTINUE
+C  
+      DXRAY = SQRT(DEP**2.0 + DX**2.0)  ! RAYPATH LENGTH FOR OBSERVED DIST
+      XHRAY = SQRT(DEP**2.0 + XH**2.0)  ! RAYPATH LENGTH FOR CALCULATED DIST
+      DIFF  = DX-XH  
+      DMID  = (XHRAY+DXRAY)/2.0         ! LENGTH OF RAY BTW XHRAY & DXRAY
+      IF(ABS(DMID) .GT. 0.0001)THEN 
+      SEST  = DIFF*COS(ANG)/DMID        ! SINE OF ESTIMATED CORRECTION ANG
+      IF(SEST .GE. 1.0)WRITE(6,*)'EST=',SEST
+      DANG  = ASIN(DIFF*COS(ANG)/DMID)
+      ELSE
+      DANG  = 0.0
+      ENDIF
+      ANG   = ATAN(DX/DEP) + DANG        ! 1ST ADJUSTMENT OF TAKEOFF ANGLE
+      IF(ANG .GE. PI/2.0)ANG = PI/2.0 - 0.5*DEG    ! CONSTRAIN ANGLE
+!
+!-------          ITERATION BEGINS       -------------
+      ITRR = 0                            ! ITERATION NUMBER
+  120 IF(ITRR .GE. 10) GOTO 130    
+C      DO WHILE(ITRR .LT. 20)
+      ITRR = ITRR + 1
+      X0   = 0.0
+      A    = 0.0
+      B    = 0.0
+      DO 125 I = 1,LS
+      XRAT = VZ(I)/VLS
+      SANG = XRAT*SIN(ANG)
+      ANGL = ASIN(SANG)                  ! TAKEOFF IN LAYER (I)
+      CANG = SQRT(1.0 - SANG**2.0)
+      IF(CANG .EQ. 0.) GOTO 125
+      A1 = XRAT*SIN(ANG)/CANG**3.0
+      A2 = 3.0*(XRAT**3.0)*(COS(ANG)**2.0)*SIN(ANG)/CANG**5.0
+      A  = A + TK(I)*(A2-A1)/2.0
+      B  = B + TK(I)*XRAT*COS(ANG)/CANG**3.0
+      X0 = X0+ TK(I)*SANG/CANG
+  125 CONTINUE
+!
+      C  = DX-X0
+      DB = B**2.0 + (4.0*A*C)                      ! TEST FOR REAL ROOTS
+      IF(DB .GE. 0.0 .AND. A .NE. 0.0)THEN
+      DANG = (-B + SQRT(DB))/(2.0*A)               ! ROOT OF QUADRATIC EQN
+      IF(B .LT. 0.0 ) DANG = (-B-SQRT(DB))/(2.0*A)
+      ELSE
+      DANG = C/B
+      ENDIF
+      ANG = ANG + DANG                             ! UPDATE TAKEOFF ANGLE
+      IF(ABS(ANG) .GE. PI/2.0)THEN
+C      WRITE(50,'(A5,F8.2,I6)')STA, ANG,EID 
+      ANG = PI/2.0 - 0.001                         ! CONSTRAIN ANGLE WITHIN PI/2
+      ENDIF
+      IF(ABS(C) .LT. 0.1E-10) GOTO 130             ! ITERATION CONVERGES
+      GOTO 120
+  130 CONTINUE      
+       
+! BEGIN    
+      LS1      = LS+1
+      TK(LS1)  = 0.0
+      SG(LS1)  = 0.0
+      X(LS1)   = 0.0
+      TD(LS1)  = 0.0
+      VZ(LS1)  = VLS
+      FLA(LS1) = QLA
+      FLO(LS1) = QLO
+      Z(LS1)   = DEP            ! DUMMY
+      N   = 0
+      U   = 0
+      XD  = 0.0
+      XX  = 0.0
+      TX  = 0.0
+      TT  = 0.0
+      XD2 = 0.0
+      TT2 = 0.0
+      P   = SIN(ANG)/VLS                     ! RAY PARAMETER
+C
+      DO 210 K = 1,LS1                       ! STN -->S
+      N     = N+1
+      J     = LS1-K+1                        ! S --> STN
+      SANG  = SIN(ANG)*VZ(J)/VLS             ! SINE OF TAKEOFF ANG IN LAYER J
+      AG    = ASIN(SANG)                     ! TAKEOFF IN LAYER I
+      SG(J) = TK(J)/COS(AG)                  ! RAY LENGTH SEGMENT
+      X(J)  = TK(J)*TAN(AG)                  ! X(J)
+      IF(J .EQ. LS .AND. TKJ.GT. 0.)SG(J) = SQRT(X(J)**2+TKJ**2.) ! CORRECTION FOR TK(J) < 1KM
+      TD(J) = SG(J)/VZ(J)                    ! T(J)
+      U     = 1/VZ(J)                        ! SLOWNESS
+      XX    = XX+ TK(J)/(U*U-P*P)**0.5 *P   
+      TX    = TX+ TK(J)*U**2.0/(U*U-P*P)**0.5  
+      XD    = XD + X(J)
+      TT    = TT + TD(J)
+C
+      QLA1 = QLA
+      QLO1 = QLO
+      AZT  = AZI
+      CALL CORD(QLA1,QLO1,AZT,XD,QLA2,QLO2)  ! GET COORDINATES FROM AZI & DIST 
+
+      FLA(J) = QLA2                          ! PARSE LAT
+      FLO(J) = QLO2                          ! PARSE LON
+      AN     = AG/DEG                        ! CONVERT ANG TO DEGREES 
+      IF(SG(J).GT. STEPL) THEN               ! RAY LENGTH > STEP LENGTH
+      N  = N-1                               ! REMOVE 1 FROM COUNT
+      GOTO 211                               ! SKIP WRITING AND GO WRITE INTERVALS
+      ENDIF
+C     
+C  (1)PARSE PARAMETERS TO GLOBAL FOR EVENT IN LAYERS > 1     
+      RFD(1,N) = FLA(J)
+      RFD(2,N) = FLO(J)
+      RFD(3,N) = Z(J)
+      RFD(4,N) = VZ(J)
+      RFD(5,N) = XD
+      RFD(6,N) = TT
+      RFD(7,N) = AN
+      RFD(8,N) = SG(J)
+      JLD(N)   = J            ! LYR OF THE J-TH POINT IVK(I)
+      IF(N .EQ. 1)JLD(N) = LS ! CONSTRAIN FIRST LAYER TO SOURCE LAYER
+      KLD(N)   = K            ! ORDER OF SEGMENT FROM S --> STN WITH THE J-TH POINT IWK(I)
+C  WRITE RAY-PATH (P-WAVES ONLY)
+      IF(JPATH2 .EQ. 1)                  
+     & WRITE(19,'(A5,2F9.4,F7.2,F6.2,3F7.2,4I3,3F7.2,I4,1X,A8)')
+     & STA,(RFD(M,N), M=1,7),LD,JLD(N),KLD(N),LS1,DEP,DIST,BAZ,N,EVID    
+C      WRITE(50,'(A5,2F9.4,5F8.2,2I4,1X,A8)')
+C     & STA,(RFD(M,N), M=1,6),DIST,JLD(N),N,EVID
+C
+  211 J0  = 0
+      IF(SG(J).GT. STEPL) J0 = INT(SG(J)/STEPL) ! DIVIDE BEELINE IN SEGMENT INTO 
+      J1    = J+1                        ! EQUAL PARTS OF LENGTH(STEPL)   
+      AB    = 1.0/REAL(J0)               ! OBTAIN INCREMENTAL FACTOR
+      DLA   = (FLA(J1)-FLA(J))*AB        ! LAT INCREMENTAL FACTOR (DLA)
+      DLO   = (FLO(J1)- FLO(J))*AB       ! LON INCREMENTAL FACTOR (DLO)
+      DZ0   = (Z(J1) - Z(J))*AB          ! DEP INCREMENTAL FACTOR (DZ0)
+C-----        
+      DO 215 K1 = 1,J0                   ! NO. OF STEPL WITHIN RAY SEGMENT
+      N     = N+1                        ! GLOBAL COUNTER 
+      J2    = J0-K1                      ! NO. OF STEPL WITHIN RAY-SEGMENT
+      XLA   = FLA(J)+ DLA*J2             ! INCREASE LAT VALUE BY DLA FROM S --> STN 
+      XLO   = FLO(J)+ DLO*J2             ! INCREASE LON VALUE BY DLO FROM S --> STN 
+      XZO   = Z(J)  + DZ0*J2             ! INCREASE DEP VALUE BY DZ0 FROM S --> STN 
+      R2    = SG(J)*AB                   ! BEELINE INCREMENTAL FACTOR (R2)
+      XD2   = XD2 + X(J)*AB              ! ADD UP HORIZONTAL DISTANCES (S --> STN) 
+      TT2   = TT2 + R2/VZ(J)             ! ADD UP TRAVEL-TIMES (S --> STN) 
+C
+C  (2)PARSE PARAMETERS TO GLOBAL FOR EVENT IN LAYERS > 1     
+      RFD(1,N) = XLA
+      RFD(2,N) = XLO
+      RFD(3,N) = XZO
+      RFD(4,N) = VZ(J)
+      RFD(5,N) = XD2
+      RFD(6,N) = TT2
+      RFD(7,N) = AN
+      RFD(8,N) = R2
+      JLD(N)   = J          ! LYR OF THE J-TH POINT    IVK(I)
+      KLD(N)   = K          ! ORDER OF PT. FROM S --> STN WITH THE J-TH POINT IWK(I)
+C  WRITE RAY-PATH (P-WAVES ONLY)
+      IF(JPATH2 .EQ. 1)                  
+     & WRITE(19,'(A5,2F9.4,F7.2,F6.2,3F7.2,4I3,3F7.2,I4,1X,A8)')
+     & STA,(RFD(M,N), M=1,7),LD,JLD(N),KLD(N),LS1,DEP,DIST,BAZ,N,EVID
+C      WRITE(50,'(A5,2F9.4,5F8.2,2I4)')
+C     & STA,(RFD(M,N), M=1,6),DIST,JLD(N),N
+ 215  CONTINUE
+      NPD      = N         ! GLOBAL NO. OF POINTS (STEPL NOT USED)
+      NSD      = LS        ! GLOBAL NO. OF SEGMENTS
+      JBD      = 0         ! GLOBAL BDR OF REFRACTION 
+ 210  CONTINUE
+      RETURN
+C
+      END SUBROUTINE TRAYD
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+
+      SUBROUTINE TRAYR
+      INCLUDE "A_PARAM_MALAY.INC"
+!     CODED BY: OSAGIE ABEL UYIMWEN 
+!               (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     PURPOSE : TO CALCULATE RAYPATH AND TRAVELTIMES FOR REFRACTED 
+!               RAYS FROM MULTIPLE HORIZONTAL BOUNDARIES
+!     
+!     CALLED BY   : TRAVT
+!     SUBROUTINES : CORD
+!------------------------------------------------------------------------
+!
+      REAL*4, DIMENSION(ML)  :: BD,VV,TA,Z0,VZ0,TK0,A0,X0,T0,SG0,P
+      INTEGER, DIMENSION(ML) :: L,JSI
+C
+      IF(EDEP(NE) .GT. BV(MOH))RETURN      
+      QLA   = ELAT(NE)
+      QLO   = ELON(NE)
+      DEP   = EDEP(NE)                   ! PARSE DEPTH
+      VTFN  = R0/(R0-DEP)                ! VEL TRANSFORMATION FACTOR
+      SEV   = SELV(JSTN)                 ! PARSE STATION ELEVETION
+      LS    = LAYS(NE)                   ! PARSE SOURCE LAYER NUMBER
+      DIST  = DXDC                       ! PARSE EPICENTRAL DISTANCE
+      IPS   = 1                          ! PHASE ID NUMBER (1) FOR P- (DEFAULT)
+      IF(IDPS .GT. 10) IPS = 2           ! PHASE ID NUMBER (2) FOR S- 
+      BAZ   = BZMC                       ! BACK-AZIMUTH (DEG)
+      AZI   = BAZ*DEG + PI               ! CONVERT TO AZIMUTH (RAD)
+      IF(AZI .GE. 2*PI) AZI = AZI - 2*PI ! CONSTRAIN AZIMUTH WITHIN 2*PI
+
+C      WRITE(50,'(A5,2(1X,A8),2I4,I7,3F9.2)')
+C     & STA,EVID,ARID,IDPS,JDAT,JSTN,FDEP,DIST,BZMC
+C               
+C----POPULATE BD & ASSIGN VV (VP OR VS)   
+      DO 100 I = 1,NL-1
+      LAY   = I
+      BD(I) = BV(I)
+      BVI   = BV(I)
+      CALL VEL1D(BVI,LAY,IPS,VI)
+      VV(I) = VI * VTFN                 ! VEL IS VP (IPS .NE. 2)
+  100 CONTINUE
+C  
+      BD(1) = SEV
+      VLS   = VV(LS)            
+      I     = 0
+      L3    = 0         
+      DO 300 K0 = LS,MOH-1
+      I     = I+1                       ! COUNT FROM S LYR
+      L1    = I+1                       ! BDR OF REFRACTION (S BOTTOM BDR TO MOHO BDR)
+      L2    = L1+1                      ! 
+      JP    = 2*I+LS+1                  ! NO OF POINTS FOR REFRACTION LAYER (S PT INCLUDED
+      IF(DEP .EQ. BD(LS+1))JP = 2*I+LS  ! FOR BDR TAKEOFF
+C-----          
+      X0S   = 0.0                       ! DIST     
+      T0S   = 0.0                       ! TIME
+      DO 310 K1 = 1,JP                  ! S --> STN
+      K     = K1
+      J     = LS+K-1                    ! DOWNWARDS --> BDR
+      LSI   = LS+I                      ! LYR BENEATH REF BDR    
+      IF(K .GT. L1)J = JP-K+1           ! UPWARD BUT DOUBLES AT REF BDR
+      IF(K .LE. I .AND. DEP .EQ. BD(LS+1))J = LS+K ! BDR TAKEOFF
+      P(K0)  = ASIN(VLS/VV(LSI))        ! RAY PARAMETER
+      Z0(K)  = BD(J)
+      VZ0(K) = VV(J)
+      L(K)   = J         
+      JSI(K) = LSI    
+      TK0(K) = Z0(K)-Z0(K-1)            ! THK S --> BDR 
+      A0(K)  = ASIN(VV(J-1)/VV(LSI))    ! ANG S --> BDR 
+      IF(K .GT. L1)THEN                
+      TK0(K) = Z0(K-1)-Z0(K)            ! THK BDR --> STN
+      A0(K)  = ASIN(VV(J)/VV(LSI))      ! ANG BDR --> STN
+      ENDIF                      
+      IF(K .EQ. 1)THEN                  ! AT S
+      Z0(K)   = DEP
+      TK0(K)  = 0.0                     ! THK AT S
+      A0(K)   = ASIN(VV(LS)/VV(LSI))    ! ANG AT S
+      ENDIF  
+      X0(K)   = TK0(K)*TAN(A0(K)) 
+      IF(A0(K) .EQ. PI/2.0)X0(K)=0.0
+      SG0(K)  = SQRT(TK0(K)**2.0 + X0(K)**2.0)   ! RAY SEGMENT  
+      T0(K)   = SG0(K)/VZ0(K)                    ! TT
+      T0(1)   = 0.0
+      X0S     = X0S + X0(K)   
+      T0S     = T0S + T0(K)     
+C      WRITE(50,'(A5,4F7.2,4I3,1X,A8)')
+C     & STA,Z0(K),X0(K),SG0(K),X0S,L1,L2,L(K),K,EVID
+  310 CONTINUE   
+C-----     
+      IF(DIST .GT. X0S)THEN     
+      IF(DEP .EQ. BD(LS+1))THEN     ! BDR TAKEOFF
+      L3      =  L1
+      X0(L3)  = DIST-X0S            ! LENGHT OF BDR OF REFRACTION
+      SG0(L3) = X0(L3)              ! RAY LENGTH ALONG BDR
+      T0(L3)  = X0(L3)/VV(LSI)      ! TIME TAKEN ALONG MOHO BDR
+      T0S     = T0S + T0(L3)        ! UPDATE TRAVELTIME
+      HALF    = X0(L3)/2.0          ! HALF LENGHT OF BDR OF REFRACTN  
+C
+      ELSE                          ! NON-BDR TAKEOFF
+      L3      = L2
+      X0(L3)  = DIST-X0S            ! LENGHT OF BDR OF REFRACTN
+      SG0(L3) = X0(L3)              ! RAY LENGTH ALONG BDR
+      T0(L3)  = X0(L3)/VV(LSI)      ! TIME TAKEN ALONG MOHO BDR
+      T0S     = T0S + T0(L3)        ! UPDATE TRAVELTIME
+      HALF    = X0(L3)/2.0          ! HALF LENGHT OF BDR OF REFRACTN  
+C      WRITE(50,'(A7,3F8.2)')'X0S=',X0(L1),X0(L2),DIST
+      ENDIF   
+      ENDIF     
+C-----            
+      IF(I .EQ. 1)TA(I) = T0S       ! PARSE 1ST RAYPATH TIME
+      IF(I. GT. 1 .AND. TA(I-1) .LT. T0S)GOTO 300 ! AVOID LARGER TIMES
+      TA(I) = T0S                   ! UPDATE WITH SMALLER TIME
+C      WRITE(50,'(/A7,3F8.2)')'TA(I)=',TA(I)
+
+      N      = 0                   ! NO OF POINTS, S --> STN
+      XD     = 0.0
+      TT     = 0.0
+      TT2    = 0.0                 ! FOR REF BDR
+      NS0    = JP                  ! GLOBAL NO. OF SEGMENTS
+      JB0    = K0+1                ! GLOBAL BDR OF REFRACTION 
+C-----
+      DO 320 K2 = 1,JP             ! S --> STNS
+      K    = K2
+      N    = N+1                                
+      NP0  = N                     ! GLOBAL NO. OF POINTS (STEPL NOT USED)
+      J    = L(K)           
+      IF(K .EQ. L3)THEN
+      N    = N-1
+      GOTO 341                     ! SHOULDN'T WRITE FOR 2ND POINT OF REF BDR
+      ENDIF
+      XD   = XD + X0(K)            ! SUM DIST
+      TT   = TT + T0(K)            ! SUM TIME     
+      QLA1 = QLA
+      QLO1 = QLO
+      AZT  = AZI
+      CALL CORD(QLA1,QLO1,AZT,XD,QLA2,QLO2)
+C
+      AN   =  A0(K)/DEG            ! CONVERT ANG TO DEGREES     
+C
+C  (1)PARSE PARAMETERS TO GLOBAL FOR EVENT IN LAYER            
+      RF0(1,N) = QLA2
+      RF0(2,N) = QLO2
+      RF0(3,N) = Z0(K)
+      RF0(4,N) = VZ0(K)
+      RF0(5,N) = XD
+      RF0(6,N) = TT
+      RF0(7,N) = AN     
+      RF0(8,N) = SG0(K)
+      JL0(N)   = J          ! LYR OF THE J-TH POINT    IVK(I)
+      KL0(N)   = K          ! ORDER OF PT. FROM S --> STN WITH THE J-TH POINT IWK(I)   
+C  WRITE RAY-PATH (P-WAVES ONLY)
+      IF(JPATH2 .EQ. 1)                  
+     & WRITE(20,'(A5,2F9.4,F7.2,F6.2,3F7.2,4I3,3F7.2,I4,1X,A8)')
+     & STA,(RF0(M,N), M=1,7),JB0,JL0(N),KL0(N),NS0,DEP,DIST,BAZ,N,EVID 
+C       WRITE(50,'(A5,2F9.4,5F8.2,I4,1X,A8)')
+C     & STA,(RF0(M,N), M=1,6),DIST,N,EVID
+
+C------1ST POINT OF REF BDR---------------------------------------- 
+341   IF(K .EQ. L1)THEN
+      M   = JSI(K)                       ! BDR OF REFRACTION
+      XL1 = XD                           ! PT1(XL1,ZL1),  PT2(XVX,ZVX) --> VERTEX OF PARABOLA 
+      ZL1 = BD(M)                        ! 
+      XVX = XL1+HALF                     ! EQN. OF PARABOLA Z(X) = A(X-XVX)**2.0 + ZVX
+      ZVX = BD(M+1)                      ! DZDX = 2A(X-XVX)
+      XL2 = XL1+HALF*2.0                 ! DSQ  = (DZDX)**2 =(2A)**2 * (X-XVX)**2
+      ZDP = ZL1 + ZAX                    ! SQRT(1 + DSQ)
+C
+      CALL LIMIT(0.0,ZDP,ZVX)            ! LIMIT DEPTH OF PETRATRATION TO ZDP
+C      
+      COF = (ZL1-ZVX)/(XL1-XVX)**2.0     ! COEFICIENT OF PARABOLA
+      J0  = INT(XL2/STEPL)               ! REF BDR LENGHT
+      AB  = 1.0/REAL(J0)   
+      DXL = (XL2-XL1)*AB                 ! INCREMENT
+      TT2 = TT                           ! PARSE TT B4 L1 TO TT2
+C      
+      DO 321 K1 = 1,J0                   ! NO. OF STEPL WITHIN REF BDR
+      N    = N+1                         ! GLOBAL COUNTER 
+      NP0  = N                           ! GLOBAL NO. OF POINTS (STEPL NOT USED)
+      J1   = K1-1                        ! 1 STEPL BEHIND
+      XB0  = XL1 + DXL*J1                ! INCREASE LAT VALUE BY DXL FROM S --> STN (1 STEPL BEHIND)
+      ZB0  = COF*(XB0-XVX)**2.0 + ZVX    ! INCREASE DEP VALUE USING PARABOLA PARAMETERS
+      XB1  = XL1 + DXL*K1                ! INCREASE LAT VALUE BY DXL FROM S --> STN 
+      ZB1  = COF*(XB1-XVX)**2.0 + ZVX    ! INCREASE DEP VALUE USING PARABOLA PARAMETERS
+      DXB  = XB1-XB0
+      DZB  = ZB1-ZB0
+      RB0  = SQRT(DZB**2.0 + DXB**2.0)   ! RAY LENGTH
+      ANZ  = ABS(ATAN(DXB/DZB)/DEG)      ! ANGLE
+      TT2  = TT2 + RB0/VZ0(K)            ! SUM TIME     
+C
+      QLA1 = QLA
+      QLO1 = QLO
+      AZT  = AZI
+      CALL CORD(QLA1,QLO1,AZT,XB1,QLA2,QLO2)
+C      
+C  (2)PARSE PARAMETERS TO GLOBAL FOR EVENT IN LAYER 
+      RF0(1,N) = QLA2
+      RF0(2,N) = QLO2
+      RF0(3,N) = ZB1
+      RF0(4,N) = VZ0(K)
+      RF0(5,N) = XB1
+      RF0(6,N) = TT2
+      RF0(7,N) = ANZ     
+      RF0(8,N) = RB0
+      JL0(N)   = J          ! LYR OF THE J-TH POINT    IVK(I)
+      KL0(N)   = K          ! ORDER OF PT. FROM S --> STN WITH THE J-TH POINT IWK(I)   
+C
+      XD       = XB1     
+      TT       = TT2
+
+C  WRITE RAY-PATH (P-WAVES ONLY)
+      IF(JPATH2 .EQ. 1)                  
+     & WRITE(20,'(A5,2F9.4,F7.2,F6.2,3F7.2,4I3,3F7.2,I4,1X,A8)')
+     & STA,(RF0(M,N), M=1,7),JB0,JL0(N),KL0(N),NS0,DEP,DIST,BAZ,N,EVID   
+C      WRITE(50,'(A5,2F9.4,5F8.2,I4)')STA,(RF0(M,N), M=1,6),DIST,N
+  321 CONTINUE       
+      ENDIF
+  320 CONTINUE
+  300 CONTINUE           
+      RETURN
+C
+      END SUBROUTINE TRAYR
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE DAZXY(JX,DLA1,DLO1,Z1,DLA2,DLO2,Z2,HYD,DEL,AZM,X,Y)
+!     CODED BY    : OSAGIE ABEL UYIMWEN 
+!                   (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     INPUT
+!     POINT A(DLA1,DLO1,Z1)  :  E.G., HYPOCENTER (LAT & LON IN DEGREES)
+!     POINT B(DLA2,DLO2,Z2)  :  E.G., STATION LOCATION 
+!
+!     OUTPUT 
+!     DEL    : EPICENTRAL DISTANCE (ARC LENGTH)
+!     HYD    : HYPOCENTRAL DISTANCE
+!     X,Y    : UNIVERSAL TRANSVERSE MERCATOR (UTM) PROJECTION
+!     AZM    : AZIMUTH FROM A TO B
+C-----------------------------------------------------------------------
+C     IMPLICIT REAL*8    :: RLA1,RLO1,RLA2,RLO2
+C     D90  = 1.5707961     ! PI/2 RADIANS = 90 DEGREES
+      R0   = 6371.05       ! (KM)
+      R1   = 6371053.4     ! (METRES) 
+      PI   = 3.14159265
+      P180 = 0.01745329
+      DKM  = 111.19     
+      EPS  = 1.0E-6        ! A SMALL NUMBER    
+      DEG  = 0.01745329    ! DEGREE -> RADIANS
+      ESQ  = 0.00676866    ! ECCENTRICITY SQUARED (CLARKE,1866)
+      RLA1 = DLA1*DEG      ! LAT1 (RAD)
+      RLO1 = DLO1*DEG      ! LON1 (RAD)
+      RLA2 = DLA2*DEG      ! LAT2 (RAD)
+      RLO2 = DLO2*DEG      ! LON2 (RAD)   
+      CLA1 = COS(RLA1)
+      TLA1 = TAN(RLA1)
+      SLA2 = SIN(RLA2)
+      CLA2 = COS(RLA2)
+      TLA2 = TAN(RLA2)
+C
+      IF(JX .NE. 1)GOTO 101
+C---  PYTHAGORAS FORMULAR (TO GET HYPOCENTRAL DISTANCE HYD IN KM)
+      XX1  = (R0-Z1)*COS(RLA1)*COS(RLO1)
+      YY1  = (R0-Z1)*COS(RLA1)*SIN(RLO1)
+      ZZ1  = (R0-Z1)*SIN(RLA1)
+      XX2  = (R0-Z2)*COS(RLA2)*COS(RLO2)
+      YY2  = (R0-Z2)*COS(RLA2)*SIN(RLO2)
+      ZZ2  = (R0-Z2)*SIN(RLA2)     
+      DX   = (XX2-XX1)**2.0
+      DY   = (YY2-YY1)**2.0
+      DZ   = (ZZ2-ZZ1)**2.0   
+      HYD  = SQRT(DX+DY+DZ)                 ! (KM)       
+C      
+C---- HAVERSINE'S FORMULAR (TO GET DEL)
+      DLAT = (RLA2-RLA1)/2.0 
+      DLON = (RLO2-RLO1)/2.0
+      T1   = SIN(DLAT)**2.0 
+      T2   = SIN(DLON)**2.0 
+      T3   = COS(RLA1)*COS(RLA2)
+      A    = T1+T2*T3                       ! THE SQUARE OF HALF THE CHORD LENGTH BETWEEN THE POINTS
+      B1   = 2.0 * ATAN2(SQRT(A),SQRT(1-A)) ! THE ANGULAR DISTANCE IN RADIANS BETWEEN THE POINTS
+      B2   = 2.0 * ASIN(SQRT(A))
+      DEL  = R0*B1                          ! DEL= ARC LENGTH (KM)
+C     DEL  = R0*B2                          ! DEL= ARC LENGTH (KM)
+      
+!   METHOD 2 (TO GET DIST) "LAW OF COSINES"
+C      A    = SIN(RLA1)*SIN(RLA2)
+C      B    = COS(RLA1)*COS(RLA2)
+C      C    = COS(RLO2-RLO1)
+C      DEL2 = ACOS(A + B*C)* R0
+C      
+C---- AZIMUTH (AZM), XX,YY
+      AZM  = 0.0
+      DLA  = RLA2-RLA1                      ! (RAD)
+      DLO  = RLO2-RLO1                      ! (RAD)
+      X0   = SIN(DLO)*COS(RLA2)             ! (RAD*ARC DEGREES)
+      Y0   = COS(RLA1)*SIN(RLA2)-SIN(RLA1)*COS(RLA2)*COS(DLO) !(ARC DEGREES)
+      AX   = ABS(X0)
+      AY   = ABS(Y0)       
+      IF(AX .LT. EPS .AND. AY .LT. EPS) RETURN
+      AZM  = ATAN2(X0,Y0)
+      IF(AZM .LT. 0)      AZM = 2.0*PI + AZM
+      IF(AZM .GE. 2.0*PI) AZM = AZM - 2.0*PI
+      X  = X0*DKM/DEG                       ! (KM)
+      Y  = Y0*DKM/DEG                       ! (KM)
+      RETURN
+C     
+C------ (X,Y) ---> (LAT,LON) 
+  101 XQ   = -X                             ! (KM)
+      YQ   = -Y 
+      X0   = XQ*DEG/DKM                     ! (RAD/KM)
+      Y0   = YQ*DEG/DKM                     ! (RAD/KM)
+      RLO2 = RLO1 - ASIN(X0/CLA1)           ! (RAD)  
+      DLO2 = RLO2/DEG                       ! (ARC DEGREES)  
+C      
+      DLO  = RLO1-RLO2
+      A    = Y0/CLA1 
+      B    = TLA1 * COS(DLO)
+      C    = ATAN2(1.0,B)
+      TM   = A/SQRT(1 + B**2.0)
+      RLA2 = ACOS(TM)- C          
+      DLA2 = RLA2/DEG    
+      RETURN
+      END SUBROUTINE DAZXY
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE CORD(PLAT,PLON,AZM,DST,QLAT,QLON)
+!     CODED BY    : OSAGIE ABEL UYIMWEN 
+!                   (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!      FOR PIONTS P AND Q   ( P *-------------------* Q )
+!      INPUT
+!      PLAT & PLON : LAT & LON OF POINT P
+!      AZM & DST   : AZIMUTH & DISTANCE FROM P
+!
+!      OUTPUT
+!      QLAT,QLON : LAT,LON OF POINT Q
+C--------------------------
+C
+      R0   = 6371.05                   ! RADIUS OF THE EARTH (KM)
+      DEG  = 0.01745329                ! DEGREE -> RADIANS
+      PLA  = PLAT*DEG                  ! CONVERT EVENT LAT TO RADIANS
+      PLO  = PLON*DEG                  ! CONVERT EVENT LON TO RADIANS      
+      RX   = DST/R0
+      QLA  = ASIN(SIN(PLA)*COS(RX) + COS(PLA)*SIN(RX)*COS(AZM))  ! LAT IN RADIANS
+      QX   = COS(RX) - SIN(PLA)*SIN(QLA)          
+      QY   = SIN(AZM)*SIN(RX)*COS(PLA)
+      QLO  = PLO + ATAN2(QY,QX)        ! LON IN RADIANS
+      QLAT = QLA/DEG                   ! CONVERT LAT TO DEGREES
+      QLON = QLO/DEG                   ! CONVERT LON TO DEGREES      
+      END SUBROUTINE CORD
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE INVERSION
+      INCLUDE "A_PARAM_MALAY.INC"
+!  TO PERFORM TRAVELTIME INVERSION 
+!
+! SUBROUTINES : LSQR
+!------------------------------------------------------------------------
+      DIMENSION    V(MDAT),W(MDAT),X(MDAT),SE(MDAT),NB(MDAT),RBS(MDAT)
+      DIMENSION    B(MG),JB(MG)
+      DIMENSION    DVX(MX,MY,MZ)             ! DVEL FOR DEPTH AND COORDINATE SLICES
+      DIMENSION    VEX(MX,MY,MZ)             ! VEL FOR DEPTH AND COORDINATE SLICES
+      CHARACTER*3  CZ(MZ)
+      CHARACTER*5  CZ2(MZ)
+      CHARACTER*6  CLA(MX),CLO(MY) 
+      CHARACTER*7  CLA2(MX),CLO2(MY)
+C   REORDER THE ELEMENTS IN A,JA,NA,RESWT
+      EPERAY  = REAL(NTOPTS)/REAL(NDAT)      ! NUMBER OF NON-ZERO ELEMENTS/PER RAY
+      NOUEQ   = NTOPTS                       ! NUMBER OF EQ. UNKNOWNS
+      NODHIT  = 0                            ! NUMBER OF EQ. UNKNOWNS ABOVE MIN OBS
+C      
+      WRITE(6,'(/A15/A16,I29/A34,I11/A37,F8.2)')
+     & 'BEFORE REORDER', 
+     & "NUMBER OF DATA",NDAT,
+     & "NUMBER OF NON-ZERO ELEMENTS IN A",NTOPTS,
+     & "NUMBER OF NON-ZERO ELEMENTS/PER RAY",EPERAY
+      WRITE(11,'(/A15/A16,I29/A34,I11/A37,F8.2)')
+     & 'BEFORE REORDER', 
+     & "NUMBER OF DATA",NDAT,
+     & "NUMBER OF NON-ZERO ELEMENTS IN A",NTOPTS,
+     & "NUMBER OF NON-ZERO ELEMENTS/PER RAY",EPERAY
+C     
+C    SELECT ONLY GRIDS WITH MINOBS HITCOUNTS
+      DO 100  I = 1,NODES       ! NUMBER OF GRID NODES IN MODEL VOLUME
+      JNDEX(I)= 0               ! INDEX NUMBER IS ZERO
+      KTJ     = JHIT(I)         ! GRID CELLS WITH HITCOUNT (1 OR MORE)
+      IF(KTJ .GE. MINOBS)THEN
+      NODHIT  = NODHIT + 1      ! COUNT GRID CELLS WITH HITCOUNT ABOVE MIN OBS
+      JNDEX(I)= NODHIT          ! INDEX NUMBER FOR CELLS THAT HAVE ABOVE MIN OBS
+      ENDIF
+ 100  CONTINUE
+C
+      NOUGD  = NODHIT
+      JDAT   = 0
+      JU     = 0
+      L2     = 0
+      DO 200 I = 1,NDAT
+      L1     = L2 + 1 
+      L2     = L2 + NAXA(I)
+      JJ     = 0
+      DO 210 L = L1,L2
+      JAXAL  = JAXA(L)
+      JIDEX  = JNDEX(JAXAL)
+      IF(JIDEX .EQ. 0)GOTO 210
+      JJ     = JJ + 1
+      JU     = JU + 1
+      JB(JU) = JIDEX
+      B(JU)  = AXA(L)
+ 210  CONTINUE
+      IF(JJ .EQ. 0)  GOTO 200
+      JDAT     = JDAT+1
+      NB(JDAT) = JJ
+      RBS(JDAT)= RESWT(I)
+ 200  CONTINUE
+C 
+      MATRX  = JDAT
+      NTOPTS = JU
+      DO 300 I  = 1,MATRX
+      NAXA(I) = NB(I)
+      RESWT(I)= RBS(I)
+ 300  CONTINUE
+      DO 400 I  = 1,NTOPTS
+      JAXA(I) = JB(I)
+      AXA(I)  = B(I)
+ 400  CONTINUE
+C
+      WRITE(6,'(/A14/A32,I13/A32,I13/A33,I12)')
+     & 'AFTER REORDER', 
+     & "NUMBER OF DATA (MATRIX A ROWS)",MATRX,
+     & "GRID UNKNOWNS  (MATRIX A COLS)",NOUGD,
+     & "NON-ZERO ELEMENTS > MINOBS IN A",NTOPTS
+      WRITE(11,'(/A14/A32,I13/A32,I13/A33,I12)')
+     & 'AFTER REORDER', 
+     & "NUMBER OF DATA (MATRIX A ROWS)",MATRX,
+     & "GRID UNKNOWNS  (MATRIX A COLS)",NOUGD,
+     & "NON-ZERO ELEMENTS > MINOBS IN A",NTOPTS
+C      
+C   USING CG-TYPE ALGORITHM LSQR TO CARRY OUT THE INVERSION
+      DAMP    = DAMPFAC    ! DAMPING FACTOR FOR VELOCITY
+      NHIT    = NODHIT
+      NDTT    = MATRX
+      CALL LSQR(NDTT,NHIT,DAMP,RESWT,V,W,X,SE,
+     &          ITEMAX,ANORM,ACOND,RNORM,ARNORM,XNORM)
+C   INVERSION COMPLETE
+C   RNORM = SQUARED RESIDUAL
+C   XNORM = NORM OF SOLUTION (VEL MODEL IN %)
+
+C   APPLY ADJUSTMENTS TO VELOCITY MODEL
+      RESSQ   = 0.0
+      DO 500 N = 1,NODES               ! BEGIN --> END OF NODEPOINTS
+      KTN  = JHIT(N)                   ! PARSE OBSERVATIONS
+      IVD  = JVD(N)                    ! PTB PRIORI IDENTIFIER
+      IF(KTN .LT. MINOBS) GOTO 500     ! SKIP OBSERVATIONS < MINOBS
+      JNN  = JNDEX(N)
+      RH   = X(JNN)                    ! X IS SLOWNESS PERTURBATION VECTOR, RH=DS/S=-DV/V
+      SV   = SE(JNN)*100.0             ! STANDARD ERROR OF VELOCITY PERTURBATION IN %
+C
+C   CALCULATE LAT,LON AND DEPTH INDECES OF VELOCITY GRID
+      NNQ     = N
+      K       = (NNQ-1)/MXY+2
+      J       = 2+(NNQ-1+(2-K)*MXY)/MX2
+      I       = 1+NNQ+MX2*(2-J)+MXY*(2-K)
+      VELIJK  = VE1(I,J,K)             ! PARSE INITIAL VEL (WITHOUT PTB)
+      PTBIJK  = DV1(I,J,K)             ! PARSE INITIAL POINTS (WITHOUT PTB)
+      RH1     = RH/(1.0+RH)
+      RESSQ   = RESSQ + RH1*RH1
+      DELM    =-VELIJK*RH1
+      DELMA   = ABS(DELM)              ! IN FRACTION 
+      IF(DELMA .GT. PTBMAX) DELM = PTBMAX*DELM/DELMA ! PLACE UPPER BOUND ON VELOCITY ADJUSTMENT
+      VELIJK2 = VELIJK + DELM
+      PTBIJK2 = PTBIJK + 100.0*DELM/VELIJK2
+C      
+C   APPLY ADJUSTMENT TO MODEL
+      VE2(I,J,K) = VELIJK2
+      DV2(I,J,K) = PTBIJK2
+      SER(I,J,K) = SV
+C           
+ 500  CONTINUE
+C----
+      RESRMS = XNORM/SQRT(FLOAT(NODHIT))   ! TOTAL MODEL RMS(%)
+      SSQR   = RNORM*RNORM                 ! SUM OF SQUARED RESIDUALS (SEC*SEC)
+      RMSRES = (SSQR/FLOAT(MATRX))*0.5      ! TOTAL RMS TRAVEL TIME RESIDUAL (SEC)
+C
+C   OUTPUT THE INVERSION RESULT TO CONSOLE AND A12-SUMMARY      
+      WRITE(6,'(2(A39,I9/),3(A39,F9.4/),A39,F9.2//A15)')
+     & 'TOTAL NUMBER OF OBSERVATIONS         =',MATRX,
+     & 'TOTAL NUMBER OF MODEL ETERS          =',NODHIT,
+     & 'NORM OF SOLUTION (VEL MODEL IN %)    =',XNORM,
+     & 'TOTAL MODEL RMS(%)                   =',RESRMS,
+     & 'TOTAL RMS TRAVEL TIME RESIDUAL (SEC) =',RMSRES,
+     & 'SUM OF SQUARED RESIDUALS (SEC*SEC)   =',SSQR,
+     & 'PLEASE WAIT...'
+      WRITE(11,'(2(A39,I9/),3(A39,F9.4/),A39,F9.2)')
+     & 'TOTAL NUMBER OF OBSERVATIONS         =',MATRX,
+     & 'TOTAL NUMBER OF MODEL ETERS          =',NODHIT,
+     & 'NORM OF SOLUTION (VEL MODEL IN %)    =',XNORM,
+     & 'TOTAL MODEL RMS(%)                   =',RESRMS,
+     & 'TOTAL RMS TRAVEL TIME RESIDUAL (SEC) =',RMSRES,
+     & 'SUM OF SQUARED RESIDUALS (SEC*SEC)   =',SSQR
+C
+C-----------------------------------------------------      
+      DO 610 K = 2,MZ1                     ! DEP: MIN--> MAX
+      IGZ = INT(GZ(K))
+      WRITE(CZ(K),'(I3)') IGZ              ! CONVERT DEPTH (INTEGER) TO CHARACTER
+      CZ2(K) = TRIM(ADJUSTL(CZ(K)))//'KM'  ! ADJUST CHARACTER AND CONCATENATE
+C
+      DO 630 J = 2,MY1                     ! LON: MIN --> MAX
+      JJ   = (K-2)*MXY+(J-2)*MX2
+      DO 620 I = MX1,2,-1                  ! LAT: MAX --> MIN
+      II   = JJ + I                        !
+      KITP(I,J,K) = JHIT(II)               ! 
+      PV1  = DV1(I,J,K)                    ! WITH/WITHOUT PTB %
+      PV2  = DV2(I,J,K)                    ! FINAL PTB %
+      VQ1  = VE1(I,J,K)                    ! VEL WITH OR WITHOUT PTB
+      VQ2  = VE2(I,J,K)                    ! FINAL VEL MODEL
+      SQ0  = SER(I,J,K)                    !
+      KQ0  = KITP(I,J,K)                   ! NUMBER OF HITS
+      DVX(I,J,K) = 0.0                     ! PTB FOR DEPTH AND COORDINATE SLICES
+      VEX(I,J,K) = 0.0                     ! VEL FOR DEPTH AND COORDINATE SLICES
+C-----
+      PTBN = PTBM                          ! PARSE LIMIT WITHOUT PTB
+      IF(PTB .GT. 0)PTBN = PTB             ! CHANGE LIMIT TO PTB WHEN OPTION IS SELECTED 
+      IF(PV2 .GT. PTBN) PV2 = PTBN         ! CONSTRAIN PTB UPPER LIMIT
+      IF(PV2 .LT. -PTBN)PV2 = -PTBN        ! CONSTRAIN PTB LOWER LIMIT
+      VQ2   = VQ2*(1.0 + 0.01*PV2)         ! DEDUCE VEL AS A RESULT OF THE CONSTRAIN
+      IF(VQ2 .EQ. 0)VQ2 = VQ1              ! PARSE INITIAL VEL IF FINAL IS ZERO    
+C-----      
+
+C-----           PTB IS NOT SELECTED        ----------------------------------
+      IF(JPTB .EQ. 0)THEN                                         
+      IF(ABS(PV2) .GT. 0.0 .AND. KQ0 .GE. MINOBS)THEN      ! SELECT ONLY CELLS WITH MINIMUM HITCOUNT  
+      WRITE(13,'(2F10.4,3F8.2)')GY(J),GX(I),-GZ(K),PV2,VQ2 ! WRITE 3D MODEL
+      DVX(I,J,K) = PV2                                     ! PARSE PTB FOR DEPTH AND COORDINATE SLICES
+      VEX(I,J,K) = VQ2                                     ! PARSE VEL FOR DEPTH AND COORDINATE SLICES
+C      IF(DVX(I,J,K) .lT. -2.0) DVX(I,J,K) = -2.0             ! FOR SABAH                              ! PARSE PTB FOR DEPTH AND COORDINATE SLICES
+      ENDIF
+C-----               PTB IS SELECTED       ----------------------------------
+      ELSEIF(JPTB .EQ. 1)THEN                        
+      JD = 1                                   ! FLIP IDENTIFIER = (1) NORMAL, (2) FLIP(-), (3) FLIP(+)              
+      IF(PV2 .LT. 0. .AND. PV1 .GT. 0.)JD = 2  ! (+VE --> -VE)
+      IF(PV2 .GT. 0. .AND. PV1 .LT. 0.)JD = 3  ! (-VE --> +VE)
+      IF(ABS(PV2) .GT. 0.0 .AND. KQ0 .GE. MINOBS)THEN      ! SELECT ONLY CELLS WITH MINIMUM HITCOUNT     
+      WRITE(13,'(2F10.4,3F8.2)')GY(J),GX(I),-GZ(K),PV2,VQ2 ! WRITE 3D MODEL
+      WRITE(22,'(2F10.4,F7.2,I5)')GY(J),GX(I),-GZ(K),JD    ! WRITE PRIORI 
+      DVX(I,J,K) = PV2                                     ! PARSE PTB FOR DEPTH AND COORDINATE SLICES
+      VEX(I,J,K) = VQ2                                     ! PARSE VEL FOR DEPTH AND COORDINATE SLICES
+      ENDIF  
+C       
+      ENDIF  
+  620 CONTINUE
+  630 CONTINUE
+  610 CONTINUE
+C  
+C-----------------------------------------------------      
+      DQ = 1.0                                 ! FOR CKB PLOT
+      WRITE(14,'(A19,20(A7))')
+     & 'LON(DEG) LAT(DEG)',(ADJUSTR(CZ2(K)),K=2,MZ1)
+      DO 710 J = 2,MY1                         ! LON COLUMN: E -> W
+      IF(GY(J) .GE. 0) THEN                    ! LON IS EAST
+      WRITE(CLO(J),'(F6.2)') GY(J)             ! CONVERT LON TO CHARACTER
+      CLO2(J) = TRIM(ADJUSTL(CLO(J)))//'E'     ! ADJUST CHARATER TO LEFT AND CONCATENATE 
+      ELSEIF(GY(J) .LT. 0) THEN                ! LON IS WEST
+      WRITE(CLO(J),'(F6.2)')-GY(J)             ! CONVERT LON TO CHARACTER
+      CLO2(J) = TRIM(ADJUSTL(CLO(J)))//'W'     ! ADJUST CHARATER TO LEFT AND CONCATENATE 
+      ENDIF
+      DO 720 I = MX1,2,-1                      ! LAT COLUMN: N -> S
+      WRITE(14,'(2F9.4,1X,20F7.2)')
+     & GY(J),GX(I),(DVX(I,J,K), K=2,MZ1),DQ    ! ROWS:  DEP IS TOP -> BOTTOM
+  720 CONTINUE                                 ! (PLAN VIEW)
+  710 CONTINUE
+C------------------------------------------------------  
+      WRITE(16,'(A18,50(A8))')
+     & 'LAT(DEG) DEP(KM)',(ADJUSTR(CLO2(J)),J=2,MY1)
+      DO 810 I = 2,MX1                         ! LAT COLUMN: N -> S
+      IF(GX(I) .GE. 0) THEN                    ! LAT IS NORTH
+      WRITE(CLA(I),'(F6.2)') GX(I)             ! CONVERT (REAL) TO CHAREACTER
+      CLA2(I) = TRIM(ADJUSTL(CLA(I)))//'N'     ! ADJUST AND CONCATENATE
+      ELSEIF(GX(I) .LT. 0) THEN                ! LAT IS SOUTH
+      WRITE(CLA(I),'(F6.2)') -GX(I)            ! CONVERT (REAL) TO CHAREACTER
+      CLA2(I) = TRIM(ADJUSTL(CLA(I)))//'S'     ! ADJUST AND CONCATENATE
+      ENDIF     
+      IR = MX1-I+2                             ! LAT COLUMN: N -> S      
+      DO 820 K = 2,MZ1                         ! DEP COLUMN: TOP -> BOTTOM
+      WRITE(16,'(F9.4,F8.2,1X,50F8.2)')
+     & GX(IR),GZ(K),(DVX(IR,J,K), J=2,MY1),DQ  ! ROWS:  LON IS E -> W
+  820 CONTINUE                                 ! (VIEW FROM THE WEST BUT FROM THE EAST WITH GMT)
+  810 CONTINUE
+C------------------------------------------------------  
+      WRITE(15,'(A18,50(A8))')
+     & 'LON(DEG) DEP(KM)',(ADJUSTR(CLA2(I)),I=MX1,2,-1)
+      DO 910 J = 2,MY1                         ! LON COLUMN: E -> W
+      DO 920 K = 2,MZ1                         ! LON COLUMN: TOP -> BOTTOM
+      WRITE(15,'(F9.4,F8.2,1X,50F8.2)')
+     & GY(J),GZ(K),(DVX(I,J,K), I=MX1,2,-1),DQ ! ROWS: LAT IS  N -> S
+  920 CONTINUE                                 ! (VIEW FROM THE SOUTH)
+  910 CONTINUE
+C------------------------------------------------------  
+      RETURN
+      END SUBROUTINE INVERSION
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE LSQR(MATRX,NHIT,DAMP,U,V,W,X,SE,
+     &                ITEMAX,ANORM,ACOND,RNORM,ARNORM,XNORM)
+      DIMENSION  U(MATRX),V(NHIT),W(NHIT),X(NHIT),SE(NHIT)
+!  LSQR TECHNIQUE (PAIGE & SAUNDERS,1982)
+!
+! SUBROUTINES : APROD, NORMALIZE
+!------------------------------------------------------------------------
+C
+      WRITE(6,'(/A41/A20,I6/A20,F6.1/)') 
+     & "LEAST-SQUARES SOLUTION (LSQR) OF  A*X = B",
+     & "MAX ITERATIONS     =",ITEMAX,     
+     & "DAMPING PARAMETER  =",DAMP
+      WRITE(11,'(/A41/A20,I6/A20,F6.1/)') 
+     & "LEAST-SQUARES SOLUTION (LSQR) OF  A*X = B",
+     & "MAX ITERATIONS     =",ITEMAX,     
+     & "DAMPING PARAMETER  =",DAMP
+
+C     INITIALIZATION
+      ATOL    = 0.0
+      BTOL    = 0.0
+      CTOL    = 0.0
+      CONLIM  = 0.0
+      IF(CONLIM .GT. 0.0) CTOL = 1.0/CONLIM
+      DAMPSQ  = DAMP*DAMP
+      ANORM   = 0.0
+      ACOND   = 0.0
+      BBNORM  = 0.0
+      DDNORM  = 0.0
+      RES2    = 0.0
+      XNORM   = 0.0
+      XXNORM  = 0.0
+      CS2     =-1.0
+      SN2     = 0.0
+      Z       = 0.0
+      ITR     = 0
+      ISTOP   = 0
+      NSTOP   = 0
+      DO 100 I = 1,NHIT
+      V(I)    = 0.0
+      X(I)    = 0.0
+      SE(I)   = 0.0
+ 100  CONTINUE
+C 
+      CALL NORMALIZE(MATRX,U,BETA)
+      CALL APROD(2,MATRX,NHIT,V,U)
+      CALL NORMALIZE(NHIT,V,ALFA)
+      DO 200 I = 1,NHIT
+ 200  W(I)    = V(I)
+      RHOBAR  = ALFA
+      PHIBAR  = BETA
+      BNORM   = BETA
+      RNORM   = BETA
+      ARNORM  = ALFA*BETA
+      IF(ARNORM .LE. 0.0)GOTO 900
+C        
+      TEST1   = 1.0
+      TEST2   = ALFA/BETA      
+C      WRITE(6,'(/A60)')
+C     & 'X(1)        X(2)        X(3)        X(4)   RNORM'
+      WRITE(11,'(/A60)')
+     & 'X(1)        X(2)        X(3)        X(4)   RNORM'
+C      
+C     MAIN ITERATION LOOP.
+ 201  ITR     = ITR + 1
+C     BIDIAGONALIZATION
+      AF      =-ALFA
+      DO 300 I = 1,MATRX
+ 300  U(I)    = AF*U(I)
+      CALL APROD(1,MATRX,NHIT,V,U)
+      CALL NORMALIZE(MATRX,U,BETA)
+      BBNORM  = BBNORM+ALFA*ALFA+BETA*BETA+DAMPSQ
+      BT      =-BETA
+      DO 400 I = 1,NHIT
+ 400  V(I)    = BT*V(I)
+      CALL APROD(2,MATRX,NHIT,V,U)
+      CALL NORMALIZE(NHIT,V,ALFA)
+C     MODIFIED QR
+      RHBAR2  = RHOBAR*RHOBAR+DAMPSQ
+      RHBAR1  = SQRT(RHBAR2)
+      CS1     = RHOBAR/RHBAR1
+      SN1     = DAMP/RHBAR1
+      PSI     = SN1*PHIBAR
+      PHIBAR  = CS1*PHIBAR
+      RHO     = SQRT(RHBAR2+BETA*BETA)
+      CS      = RHBAR1/RHO
+      SN      = BETA/RHO
+      THETA   = SN*ALFA
+      RHOBAR  =-CS*ALFA
+      PHI     = CS*PHIBAR
+      PHIBAR  = SN*PHIBAR
+      TAU     = SN*PHI
+C     UPDATE X, W AND THE STANDARD ERROR ESTIMATES.
+      T1      = PHI/RHO
+      T2      =-THETA/RHO
+      T3      = 1.0/RHO
+      DO 500 I = 1, NHIT
+      T       = W(I)
+      X(I)    = T1*T+X(I)
+      W(I)    = T2*T+V(I)
+      T3T     = T3*T
+      T       = T3T*T3T
+      SE(I)   = T+SE(I)
+      DDNORM  = T+DDNORM
+ 500  CONTINUE
+      DELTA   = SN2*RHO
+      GAMBAR  =-CS2*RHO
+      RHS     = PHI-DELTA*Z
+      ZBAR    = RHS/GAMBAR
+      XNORM   = SQRT(XXNORM+ZBAR*ZBAR)
+      GAMMA   = SQRT(GAMBAR*GAMBAR+THETA*THETA)
+      CS2     = GAMBAR/GAMMA
+      SN2     = THETA/GAMMA
+      Z       = RHS/GAMMA
+      XXNORM  = XXNORM + Z*Z
+      ANORM   = SQRT(BBNORM)
+      ACOND   = ANORM*SQRT(DDNORM)
+      RES1    = PHIBAR*PHIBAR
+      RES2    = RES2+PSI*PSI
+      RNORM   = SQRT(RES1+RES2)
+      ARNORM  = ALFA*ABS(TAU)
+      TEST1   = RNORM/BNORM
+      TEST2   = ARNORM/(ANORM*RNORM)
+      TEST3   = 1.0/ACOND
+      T1      = TEST1/(1.0+ANORM*XNORM/BNORM)
+      RTOL    = BTOL+ATOL*ANORM*XNORM/BNORM
+      T3      = 1.0+TEST3
+      T2      = 1.0+TEST2
+      T1      = 1.0+T1
+C      WRITE(6,'(I4,4(F12.6),F10.3)')ITR,(X(J),J=1,4),RNORM
+      WRITE(11,'(I4,4(F12.6),F10.3)')ITR,(X(J),J=1,4),RNORM
+C
+      IF(ITR .LT. 60)GOTO 201
+      IF(ITR .GE. ITEMAX)  ISTOP = 7
+      IF(T3 .LE. 1.0)      ISTOP = 6
+      IF(T2 .LE. 1.0)      ISTOP = 5
+      IF(T1 .LE. 1.0)      ISTOP = 4
+      IF(TEST3 .LE. CTOL)  ISTOP = 3
+      IF(TEST2 .LE. ATOL)  ISTOP = 2
+      IF(TEST1 .LE. RTOL)  ISTOP = 1
+      IF(MATRX .LE. 40 .OR. NHIT .LE. 40)GOTO 600
+      IF(ITR .LE. 10)                   GOTO 600
+      IF(ITR .GE. ITEMAX-10)            GOTO 600
+      IF(MOD(ITR,10) .EQ. 0)            GOTO 600
+      IF(TEST3 .LE. 2.0*CTOL)           GOTO 600
+      IF(TEST2 .LE. 10.0*ATOL)          GOTO 600
+      IF(TEST1 .LE. 10.0*RTOL)          GOTO 600
+      GO TO 700
+ 600  CONTINUE
+C
+      IF(MOD(ITR,10).EQ. 0 .AND. ITR .LT. ITEMAX)
+     & WRITE(11,'(A60)')''
+C     & 'X(1)        X(2)        X(3)        X(4)   RNORM'
+C
+C      WRITE(11,'(I4,4(F12.6),2(F13.6))') 
+C     & ITR,X(1),RNORM,TEST1,TEST2,ANORM,ACOND
+C     
+C-----      
+700   IF(ISTOP .EQ. 0)NSTOP = 0
+      IF(ISTOP .EQ. 0)GOTO 201
+      NCONV   = 1
+      NSTOP   = NSTOP+1
+      IF(NSTOP .LT. NCONV .AND. ITR .LT. ITEMAX)ISTOP = 0
+      IF(ISTOP .EQ. 0)GOTO 201
+C     END OF ITERATION LOOP
+      T       = 1.0
+      IF(MATRX .GT. NHIT) T = MATRX - NHIT
+      IF(DAMPSQ .GT. 0.0) T = MATRX
+      T       = RNORM/SQRT(T)
+      DO 800 I = 1, NHIT
+      SE(I)   = T*SQRT(SE(I))
+ 800  CONTINUE
+C
+C      IF(ITR .EQ. ITEMAX)THEN
+      IF(DAMPSQ .GT. 0.0)THEN
+      WRITE(6,'(/A40,A39)')
+     & 'ITR        X(1)    FUNCTION  COMPATIBLE',
+     & 'INCOMPATIBLE   NORM(ABAR)   COND(ABAR)'
+      WRITE(11,'(/A40,A39)')
+     & 'ITR        X(1)    FUNCTION  COMPATIBLE',
+     & 'INCOMPATIBLE   NORM(ABAR)   COND(ABAR)'
+      ELSEIF(DAMPSQ .LE. 0.0)THEN
+      WRITE(6,'(/A40,A39)')
+     & 'ITR        X(1)    FUNCTION  COMPATIBLE',
+     & 'INCOMPATIBLE      NORM(A)      COND(A)'
+      WRITE(11,'(/A40,A39)')
+     & 'ITR        X(1)    FUNCTION  COMPATIBLE',
+     & 'INCOMPATIBLE      NORM(A)      COND(A)'
+      ENDIF
+      WRITE(6,'(I4,4(F12.6),2(F13.6))') 
+     & ITR,X(1),RNORM,TEST1,TEST2,ANORM,ACOND
+      WRITE(11,'(I4,4(F12.6),2(F13.6))') 
+     & ITR,X(1),RNORM,TEST1,TEST2,ANORM,ACOND
+C     
+      WRITE(6,'(/2(A23,I6/))')
+     & 'NUMBER OF ITERATIONS =',ITR,
+     & 'STOPPING CONDITION   =',ISTOP
+      WRITE(11,'(/2(A23,I6/))')
+     & 'NUMBER OF ITERATIONS =',ITR,
+     & 'STOPPING CONDITION   =',ISTOP
+
+      IF(ISTOP .EQ. 0)THEN
+      WRITE(6,'(A30/)')'THE EXACT SOLUTION IS  X = 0.0'
+      WRITE(11,'(A30/)')'THE EXACT SOLUTION IS  X = 0.0'
+      ELSEIF(ISTOP .EQ. 1)THEN
+      WRITE(6,'(A40/)')'A*X - B  IS SMALL ENOUGH, FOR ATOL, BTOL'
+      WRITE(11,'(A40/)')'A*X - B  IS SMALL ENOUGH, FOR ATOL, BTOL'
+      ELSEIF(ISTOP .EQ. 2)THEN
+      WRITE(6,'(A40/)')'LEAST-SQRS SOLU IS GOOD ENOUGH, FOR ATOL'
+      WRITE(11,'(A40/)')'LEAST-SQRS SOLU IS GOOD ENOUGH, FOR ATOL'
+      ELSEIF(ISTOP .EQ. 3)THEN
+      WRITE(6,'(A40/)')'ESTIMATED COND(ABAR) HAS EXCEEDED CONLIM'
+      WRITE(11,'(A40/)')'ESTIMATED COND(ABAR) HAS EXCEEDED CONLIM'
+      ELSEIF(ISTOP .EQ. 4)THEN
+      WRITE(6,'(A41/)')'A*X - B  IS SMALL ENOUGH FOR THIS MACHINE'
+      WRITE(11,'(A41/)')'A*X - B  IS SMALL ENOUGH FOR THIS MACHINE'
+      ELSEIF(ISTOP .EQ. 5)THEN
+      WRITE(6,'(A30/)')'LEAST-SQRS SOLN IS GOOD ENOUGH'
+      WRITE(11,'(A30/)')'LEAST-SQRS SOLN IS GOOD ENOUGH'
+      ELSEIF(ISTOP .EQ. 6)THEN
+      WRITE(6,'(A40/)')'COND(ABAR) APPEAR LARGE FOR THIS MACHINE'
+      WRITE(11,'(A40/)')'COND(ABAR) APPEAR LARGE FOR THIS MACHINE'
+      ELSEIF(ISTOP .EQ. 7)THEN
+      WRITE(6,'(A36/)')'THE ITERATION LIMIT HAS BEEN REACHED'
+      WRITE(11,'(A36/)')'THE ITERATION LIMIT HAS BEEN REACHED'
+      ELSE
+      WRITE(6,'(A25/)')'CANNOT DECOMPOSE MATRIX A'
+      WRITE(11,'(A25/)')'CANNOT DECOMPOSE MATRIX A'
+      ENDIF
+ 900  RETURN
+      END SUBROUTINE LSQR
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+!
+      SUBROUTINE NORMALIZE(NM,X,S)
+      DIMENSION  X(NM)
+C     NORMALIZES VECTOR X
+      EPS    = 1.0E-10
+      S      = 0.0
+      DO 100 I = 1,NM
+      XI     = X(I)
+ 100  S      = S + XI*XI
+      S      = SQRT(S)
+      SS     = 0.0
+      IF(S .GT. EPS) SS = 1.0/S
+      DO 200 I = 1,NM
+ 200  X(I)   = X(I)*SS
+      RETURN
+      END SUBROUTINE NORMALIZE
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+!
+      SUBROUTINE APROD(ID,MATRX,NDHIT,X,Y)
+      INCLUDE "A_PARAM_MALAY.INC"
+      DIMENSION  X(NDHIT),Y(MATRX)
+C
+      L2     = 0
+      IF(ID .EQ. 1) THEN        !  SET  Y = Y+A*X.
+      DO 100 I = 1,MATRX
+      SMM    = 0.0
+      L1     = L2 + 1
+      L2     = L2 + NAXA(I)
+      DO 110 L = L1,L2
+      J      = JAXA(L)
+      SMM    = SMM + AXA(L)* X(J)
+ 110  CONTINUE
+      Y(I)   = Y(I)+ SMM
+ 100  CONTINUE
+      RETURN
+C-----------      
+      ELSEIF(ID .EQ. 2) THEN    ! SET  X = X+AT*Y
+      DO 200 I = 1,MATRX
+      YI     = Y(I)
+      L1     = L2 + 1
+      L2     = L2 + NAXA(I)
+      DO 210 L = L1,L2
+      J      = JAXA(L)
+      X(J)   = X(J) + AXA(L) * YI
+ 210  CONTINUE
+ 200  CONTINUE
+      ENDIF
+      RETURN
+C-----------      
+      END SUBROUTINE APROD
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE LIMIT(C1,C2,C)
+!     TO ENSURE THAT C IS WITHIN C1 AND C2      
+      A1   = AMIN1(C1,C2)
+      A2   = AMAX1(C1,C2)
+      IF(C .LT. A1)  C = A1
+      IF(C .GT. A2)  C = A2
+      RETURN
+      END SUBROUTINE LIMIT
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE CKBOARD(I,J,K,V0,V,MGP,IND)
+      CALL GROUP(K,MGP,KG)
+      IF(IND .EQ. 0) KK = KG
+      IF(IND .EQ. 1) KK = KG+1
+      CALL GROUP(I,MGP,IG)
+      CALL GROUP(J,MGP,JG)
+      CALL CKB(IG,JG,KK,V0,V)
+      RETURN
+      END SUBROUTINE CKBOARD
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE GROUP(I,MGP,IG)
+      A1   = FLOAT(I)/FLOAT(MGP)
+      A2   = FLOAT(IFIX(A1))
+      IG   = IFIX(A1)
+      IF(A1 .GT. A2) IG = IG+1
+      RETURN
+      END SUBROUTINE GROUP
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE CKB(I,J,K,V0,V)
+      FK   = FLOAT(K)/2.0
+      FKK  = FLOAT(IFIX(FK))
+      AK   = ABS(FKK-FK)
+C     WHEN KK = 0, K IS AN EVEN NUMBER(GUSU)
+C     WHEN KK = 1, K IS AN ODD  NUMBER(KISU)
+      KK   = 0
+      IF(AK .GT. 0.1) KK = 1
+      M    = KK+1
+      CALL BOARD(I,J,V0,V,M)
+      RETURN
+      END SUBROUTINE CKB
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+
+      SUBROUTINE BOARD(I,J,V0,V,INDEX)
+C     INDEX=1, V=-V0, WHEN BOTH I & J ARE EVEN OR ODD;
+C              V= V0, WHEN ONE IS A EVEN, THE OTHER IS AN ODD;
+C     INDEX=2, V= V0, WHEN BOTH I & J ARE EVEN OR ODD;
+C              V=-V0, WHEN ONE IS A EVEN, THE OTHER IS AN ODD.
+      FI   = FLOAT(I)/2.0
+      FJ   = FLOAT(J)/2.0
+      FII  = FLOAT(IFIX(FI))
+      FJJ  = FLOAT(IFIX(FJ))
+      AI   = ABS(FII-FI)
+      AJ   = ABS(FJJ-FJ)
+C     WHEN II = 0, I IS AN EVEN NUMBER(GUSU)
+C     WHEN II = 1, I IS AN ODD  NUMBER(KISU)
+C     THE SAME FOR J.
+      II   = 0
+      IF(AI .GT. 0.1) II = 1
+      JJ   = 0
+      IF(AJ .GT. 0.1) JJ = 1
+      IF(INDEX .EQ. 1)    THEN
+      V  = V0
+      	IF(II .EQ. JJ) V = -V0
+      ELSE IF(INDEX.EQ.2) THEN
+      V  = -V0
+        IF(II .EQ. JJ) V = V0
+      ELSE
+      ENDIF
+      RETURN
+      END SUBROUTINE BOARD
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C      
+      SUBROUTINE WAVE_TYPE(DEP,DEL,JPS,KPS)
+!     CODED BY    : OSAGIE ABEL UYIMWEN 
+!                   (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+C     TO CONVERT P/S PAHASE FROM 1 & 2 TO PHASE NUMBERS       
+!     INPUT : DEP (DEPTH)
+!             DEL (DISTANCE)
+!             JPS (1= P, 2= S)
+!
+!     OUTPUT: KPS (PAHASE NUMBERS) 
+!             P- : 1(Pg),2(Pb),3(Pb),5(Pn),6(Pn),7(P),9(unknown)
+!             S- : 11(Sg),12(Sb),13(Sb),15(Sn),16(Sn),17(S),19(unknown)
+C
+      Z1  =  20.0
+      Z2  =  35.0 
+      Z3  =  70.0    
+      XD1 =  80.0
+      XD2 = 120.0
+      XD3 = 160.0
+C      
+      IF(JPS .EQ. 1)THEN                              ! P- PHASE     
+      IF(DEP .LT. Z1)THEN                             ! UPPER CRUST  
+      IF(DEL .LT. XD1) KPS = 1                        ! Pg
+      IF(DEL .GE. XD1 .AND. DEL .LT. XD2) KPS = 2     ! Pb (REFRACTED)  (P*)
+      IF(DEL .GE. XD2) KPS = 5                        ! Pn (REFRACTED) 
+      ELSEIF(DEP .GE. Z1 .AND. DEP .LT. Z2)THEN       ! LOWER CRUST 
+      IF(DEL .LT. XD3) KPS = 3                        ! Pb (P*)
+      IF(DEL .GE. XD3) KPS = 5                        ! Pn (REFRACTED) 
+      ELSEIF(DEP .GE. Z2 .AND. DEP .LT. Z3)THEN       ! UPPER MANTLE        
+      KPS = 6                                         ! Pn
+      ELSEIF(DEP .GE. Z3)THEN                         ! LOWER MANTLE        
+      KPS = 7                                         ! P
+      ELSE
+      KPS = 9                                         ! P- UNKNOWN        
+      ENDIF     
+C      
+      ELSEIF(JPS .EQ. 2)THEN                          ! S- PHASE
+      XD3 = 180.0      
+      IF(DEP .LT. Z1)THEN                             ! UPPER CRUST  
+      IF(DEL .LT. XD1) KPS = 11                       ! Sg
+      IF(DEL .GE. XD1 .AND. DEL .LT. XD2) KPS = 12    ! Sb (REFRACTED)  (S*)
+      IF(DEL .GE. XD2) KPS = 15                       ! Sn (REFRACTED) 
+      ELSEIF(DEP .GE. Z1 .AND. DEP .LT. Z2)THEN       ! LOWER CRUST 
+      IF(DEL .LT. XD3) KPS = 13                       ! Sb (S*)
+      IF(DEL .GE. XD3) KPS = 15                       ! Sn (REFRACTED) 
+      ELSEIF(DEP .GE. Z2 .AND. DEP .LT. Z3)THEN       ! UPPER MANTLE        
+      KPS = 16                                        ! Sn
+      ELSEIF(DEP .GE. Z3)THEN                         ! LOWER MANTLE        
+      KPS = 17                                        ! S
+      ELSE
+      KPS = 19                                        ! S- UNKNOWN        
+      ENDIF 
+C          
+      ENDIF
+      RETURN
+      END SUBROUTINE WAVE_TYPE
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE PHASE(ID,DEP,JPS,CPS)
+C     TO CONVERT : ID=1; PHASE ID LETTERS -> NUMBERS  P/S 
+C                  ID=2; PHASE ID NUMBERS -> LETTERS  P/S     
+!             P- : 1(Pg),2(Pb/P*),3(Pb/P*),5(Pn/P),6(Pn/P),7(P),9(unknown)
+!             S- : 11(Sg),12(Sb/S*),13(Sb/S*),15(Sn/S),16(Sn/S),17(S),19(unknown)
+!
+!     Lg(21): A wave group observed at larger regional  
+!             distances and caused by superposition of multiple 
+!             S-wave reverberations and SV to P and/or P to SV 
+!             conversions inside the whole crust. The maximum  
+!             energy travels with a group velocity of approximately
+!             3.5 km/s (BISC).
+!     Rg(22): Short-period crustal Rayleigh wave (BISC).
+! 
+C SURFACE WAVES
+!     LR(23): Rayleigh wave     
+!     LQ(24): Love wave
+C--------------------
+      CHARACTER*5  :: CPS
+      Z0  =   DEP
+      Z1  =  20.0
+      Z2  =  35.0 
+      Z3  =  70.0   
+C        
+      IF(ID .EQ. 1)THEN  ! CONVERT PHASE LETTERS -> NUMBERS
+      JPS = 9                         ! P- UNKNOWN
+      IF(CPS .EQ. 'PG'.OR. CPS .EQ. 'Pg'.OR. CPS .EQ. 'pg')JPS = 1
+      IF(CPS .EQ. 'PB'.OR. CPS .EQ. 'Pb'.OR. CPS .EQ. 'pb')JPS = 2
+      IF(CPS .EQ. 'P*'.OR. CPS .EQ. 'p*')                  JPS = 2
+        IF(JPS .EQ. 2 .AND. Z0 .GE. Z1 .AND. Z0 .LT. Z2)   JPS = 3
+      IF(CPS .EQ. 'PN'.OR. CPS .EQ. 'Pn'.OR. CPS .EQ. 'pn')JPS = 5
+      IF(CPS .EQ. 'P'.OR. CPS .EQ. 'p')                    JPS = 5
+        IF(JPS .EQ. 5)THEN
+          IF(Z0 .GE. Z2 .AND. Z0 .LT. Z3)                  JPS = 6       
+          IF(Z0 .GE. Z3)                                   JPS = 7       
+        ENDIF
+C     S- PHASES
+      IF(CPS .EQ. 'SG'.OR. CPS .EQ. 'Sg'.OR. CPS .EQ. 'sg')JPS = 11
+      IF(CPS .EQ. 'SB'.OR. CPS .EQ. 'Sb'.OR. CPS .EQ. 'sb')JPS = 12
+      IF(CPS .EQ. 'S*'.OR. CPS .EQ. 's*')                  JPS = 12
+        IF(JPS .EQ. 12 .AND. Z0 .GE. Z1 .AND. Z0 .LT. Z2)  JPS = 13
+      IF(CPS .EQ. 'SN'.OR. CPS .EQ. 'Sn'.OR. CPS .EQ. 'sn')JPS = 15
+      IF(CPS .EQ. 'S'.OR. CPS .EQ. 's')                    JPS = 15
+        IF(JPS .EQ. 15)THEN
+          IF(Z0 .GE. Z2 .AND. Z0 .LT. Z3)                  JPS = 16       
+          IF(Z0 .GE. Z3)                                   JPS = 17       
+        ENDIF
+      IF(CPS .EQ. 'Sx')JPS = 19     ! S- UNKNOWN
+C        
+      IF(CPS .EQ. 'LG'.OR. CPS .EQ. 'Lg'.OR. CPS .EQ. 'lg')JPS = 21 
+      IF(CPS .EQ. 'RG'.OR. CPS .EQ. 'Rg'.OR. CPS .EQ. 'rg')JPS = 22
+C        
+C     SURFACE WAVES
+      IF(CPS .EQ. 'LR')                                    JPS = 23
+      IF(CPS .EQ. 'LQ')                                    JPS = 24
+C        
+C-----      
+      ELSEIF(ID .EQ. 2)THEN  ! CONVERT NUMBERS -> PHASES LETTERS
+C-----
+C     P-WAVE     
+      IF(JPS .EQ. 1)CPS  = 'Pg'
+      IF(JPS .EQ. 2)CPS  = 'Pb'
+      IF(JPS .EQ. 3)CPS  = 'Pb'
+      IF(JPS .EQ. 5)CPS  = 'Pn'
+      IF(JPS .EQ. 6)CPS  = 'Pn'
+      IF(JPS .EQ. 9)CPS  = 'Px'    ! P- UNKNOWN
+C     S-WAVE   
+      IF(JPS .EQ. 11)CPS = 'Sg'
+      IF(JPS .EQ. 12)CPS = 'Sb'
+      IF(JPS .EQ. 13)CPS = 'Sb'
+      IF(JPS .EQ. 15)CPS = 'Sn'
+      IF(JPS .EQ. 16)CPS = 'Sn'
+      IF(JPS .EQ. 19)CPS = 'Sx'    ! S- UNKNOWN
+C        
+      IF(JPS .EQ. 21)CPS  = 'Lg'
+      IF(JPS .EQ. 22)CPS  = 'Rg'  
+C     SURFACE WAVE   
+      IF(JPS .EQ. 23)CPS  = 'LR'
+      IF(JPS .EQ. 24)CPS  = 'LQ'  
+C
+      ENDIF
+C-----      
+      RETURN
+      END SUBROUTINE PHASE
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+!
+!     SUBROUTINE AZI_RES
+!     CODED BY: 
+!     OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     TO PERFORM RESIDUAL ANALYSIS AT FOUR AZIMUTHAL ANGLES FROM STATION
+!
+      SUBROUTINE AZI_RES
+      INCLUDE "A_PARAM_MALAY.INC"
+      CHARACTER*4 CNAR       ! CHARACTER FOR COMPUTED NUMBER FOR ARRIVALS
+      CHARACTER*5 CAVR       ! CHARACTER FOR COMPUTED AVERAGES
+      CHARACTER*6 CSTN       ! CONCARTINATED STN+','
+      CHARACTER*12 SNAR      ! CONCARTINATED STN+'('+CNAR+')'+','
+      CHARACTER*18 SNARV     ! CONCARTINATED STN+'('+CNAR+CAVR+')'+','
+      CHARACTER*40 CTRY      ! CONCARTINATED STN+', '+CITY
+C    
+      OPEN(31,FILE="A31_AVE_RES.TXT")          ! AVERAGE RESIDUALS (ALL BAZ)
+      OPEN(32,FILE="A32_090.TXT")              ! AVERAGE RESIDUALS (0=BAZI<090)
+      OPEN(33,FILE="A33_180.TXT")              ! AVERAGE RESIDUALS (90=BAZI<180)
+      OPEN(34,FILE="A34_270.TXT")              ! AVERAGE RESIDUALS (180=BAZI<270)
+      OPEN(35,FILE="A35_360.TXT")              ! AVERAGE RESIDUALS (270=BAZI<360)
+      OPEN(36,FILE="A36_STN_USED.TXT")         ! LIST STATIONS USED (FOR GMT STATION PLOT)
+C WRITE HEADER FOR THE FYLES
+      WRITE(31,'(A57,A50)')
+     &'STN   LAT(DEG)  LON(DEG) ELV(KM)  N90 N180 N270 N360 NARV',
+     &'AV90 AV180 AV270 AV360  AVRC  AVRR COUNTRY, CITY'
+C     
+      WRITE(32,'(A59,A56)')
+     &'STN,   STN(NARR),   STN(NARR|AVRES),   LAT(DEG),  LON(DEG),',
+     &'ELV(KM), NARR,  AV90, TARV, AVERC, AVERR, COUNTRY, CITY'
+      WRITE(33,'(A59,A56)')
+     &'STN,   STN(NARR),   STN(NARR|AVRES),   LAT(DEG),  LON(DEG),',
+     &'ELV(KM), NARR, AV180, TARV, AVERC, AVERR, COUNTRY, CITY'
+      WRITE(34,'(A59,A56)')
+     &'STN,   STN(NARR),   STN(NARR|AVRES),   LAT(DEG),  LON(DEG),',
+     &'ELV(KM), NARR, AV270, TARV, AVERC, AVERR, COUNTRY, CITY'
+      WRITE(35,'(A59,A56)')
+     &'STN,   STN(NARR),   STN(NARR|AVRES),   LAT(DEG),  LON(DEG),',
+     &'ELV(KM), NARR, AV360, TARV, AVERC, AVERR, COUNTRY, CITY'
+      WRITE(36,'(A23)') 'LON(DEG) LAT(DEG)  STN'
+C
+      LST   = 0                ! NUMBER OF SELECTED STATIONS FROM GLOBAL LIST COUNTER
+      DO 300 I = 1,NST         ! ALL STN
+      K      = 0               ! COUNTER (STN ARRIVAL AT ALL ANGLES)
+      K90    = 0               ! COUNTER (STN ARRIVAL 0 <= ANGLES < 90 DEGREES)
+      K180   = 0               ! COUNTER (STN ARRIVAL 90 <= ANGLES < 180 DEGREES)
+      K270   = 0               ! COUNTER (STN ARRIVAL 180 <= ANGLES < 270 DEGREES)
+      K360   = 0               ! COUNTER (STN ARRIVAL 270 <= ANGLES < 360 DEGREES)
+      SUM90  = 0.0             ! SUM (RES K90)
+      SUM18  = 0.0             ! SUM (RES K180)
+      SUM27  = 0.0             ! SUM (RES K270)
+      SUM36  = 0.0             ! SUM (RES K360)
+      SUMRR  = 0.0             ! SUM OF RESIDUE REPORTED
+      SUMRC  = 0.0             ! SUM OF RESIDUE CALCULATED
+      DO 301 J = 1,NDAT        ! TOTAL MUNBER OF P/S ARRIVALS
+      IF(STN(I) .EQ. STNA(J))THEN   ! POSITION OF Ith STN IS DETERMINED
+      K      = K+1
+C   WEIGHTING WTT(MEQ) FOR P- RESIDUALS
+C      ABRES     = ABS(RESC(J))         ! ABSOLUTE RESIDUAL VALUE
+C      IF(ABRES .LT. 1.0) WTT(JDAT) = 1.0   ! FULL WEIGHT
+C      IF(ABRES .GE. 1.0) WTT(JDAT) = 0.50  ! 0.50 WEIGHT            
+C      SUMRC  = SUMRC + (RESC(J)**2.0)     ! SUMMATION OF RES SQUARED(CALCULATED)
+C      SUMRR  = SUMRR + (RESR(J)**2.0)     ! SUMMATION OF RES SQUARED(REPORTED)
+      SUMRR  = SUMRR + RESR(J)   ! SUMMATION OF RES (REPORTED) 
+      SUMRC  = SUMRC + RESC(J)   ! SUMMATION OF RES (CALCULATED) 
+      IF(BAZC(J) .GT. 0.0 .AND. BAZC(J) .LT. 90.0)THEN        ! FOR 0 <= ANGLES < 90 DEGREES
+      K90   = K90+1
+      SUM90 = SUM90 + RESC(J)
+      ELSEIF(BAZC(J) .GE. 90.0 .AND. BAZC(J) .LT. 180.0)THEN  ! FOR 90 <= ANGLES < 180 DEGREES
+      K180  = K180+1
+      SUM18 = SUM18 + RESC(J)
+      ELSEIF(BAZC(J) .GE. 180.0 .AND. BAZC(J) .LT. 270.0)THEN ! FOR 180 <= ANGLES < 270 DEGREES
+      K270  = K270+1
+      SUM27 = SUM27 + RESC(J)
+      ELSEIF(BAZC(J) .GE. 270.0 .AND. BAZC(J) .LT. 360.0)THEN ! FOR 270 <= ANGLES < 360 DEGREES
+      K360  = K360+1 
+      SUM36 = SUM36 + RESC(J)
+      ENDIF
+      ENDIF
+  301 CONTINUE
+      AV90   = SUM90/K90
+      AV180  = SUM18/K180
+      AV270  = SUM27/K270
+      AV360  = SUM36/K360
+      AVRR   = SUMRR/K          ! AVE. RES FOR ALL DIRECTIONS (REPORTED)
+      AVRC   = SUMRC/K          ! AVE. RES FOR ALL DIRECTIONS (CALCULATED) 
+C AVOID DIVISION BY ZERO        
+      IF(K90 .EQ. 0) AV90  = 0.0     
+      IF(K180 .EQ. 0)AV180 = 0.0
+      IF(K270 .EQ. 0)AV270 = 0.0
+      IF(K360 .EQ. 0)AV360 = 0.0
+C WRITE USED STATION LIST AND AVE. RES VALUES
+      IF(K .GT. 1)THEN
+      CSTN  = TRIM(STN(I))//','
+      CTRY  = TRIM(SLOC(I))//', '//TRIM(SCTY(I))
+      LST = LST + 1                ! COUNT USED STNS
+      LLST = LST
+      WRITE(31,'(A5,F9.4,F10.4,F8.3,5I5,6F6.2,1X,A40)')
+     & STN(I),SLAT(I),SLON(I),-SELV(I),K90,K180,K270,K360,K,
+     & AV90,AV180,AV270,AV360,AVRC,AVRR,CTRY
+      WRITE(36,'(F9.4,F9.4,1X,A5)')SLON(I),SLAT(I),STN(I)
+C
+C- K90  ------------------------------------------------------------     
+      IF(K90 .GT. 0)THEN
+        WRITE(CAVR,'(F4.2)') AV90 
+        IF(AV90 .LT. 0)WRITE(CAVR,'(F5.2)')AV90   
+        IF(K90 .LT. 10)                         WRITE(CNAR,'(I1)')K90            
+        IF(K90 .GE. 10 .AND. K90 .LT. 100)      WRITE(CNAR,'(I2)')K90 
+        IF(K90 .GE. 100 .AND. K90 .LT. 1000)    WRITE(CNAR,'(I3)')K90
+        IF(K90 .GE. 1000 .AND. K90 .LT. 10000)  WRITE(CNAR,'(I4)')K90
+      SNAR  = TRIM(STN(I))//'('//TRIM(CNAR)//'),'
+      SNARV = TRIM(STN(I))//'('//TRIM(CNAR)//'|'//TRIM(CAVR)//'),'
+      WRITE(32,'(A6,1X,A12,1X,A18,F9.4,A1,F10.4,A1,F8.4,A1,
+     & I5,A1,F6.2,A1,I5,A1,2(F6.2,A1),1X,A40)')
+     & CSTN,SNAR,SNARV,SLAT(I),',',SLON(I),',',-SELV(I),',',
+     & K90,',',AV90,',',K,',',AVRC,',',AVRR,',',CTRY
+      ENDIF
+C      
+C- K180  ------------------------------------------------------------    
+      IF(K180 .GT. 0)THEN
+        WRITE(CAVR,'(F4.2)') AV180 
+        IF(AV180 .LT. 0)WRITE(CAVR,'(F5.2)')AV180   
+        IF(K180 .LT. 10)                         WRITE(CNAR,'(I1)')K180            
+        IF(K180 .GE. 10 .AND. K180 .LT. 100)     WRITE(CNAR,'(I2)')K180 
+        IF(K180 .GE. 100 .AND. K180 .LT. 1000)   WRITE(CNAR,'(I3)')K180
+        IF(K180 .GE. 1000 .AND. K180 .LT. 10000) WRITE(CNAR,'(I4)')K180 
+      SNAR  = TRIM(STN(I))//'('//TRIM(CNAR)//'),'
+      SNARV = TRIM(STN(I))//'('//TRIM(CNAR)//'|'//TRIM(CAVR)//'),'
+      WRITE(33,'(A6,1X,A12,1X,A18,F9.4,A1,F10.4,A1,F8.4,A1,
+     & I5,A1,F6.2,A1,I5,A1,2(F6.2,A1),1X,A40)')
+     & CSTN,SNAR,SNARV,SLAT(I),',',SLON(I),',',-SELV(I),',',
+     & K180,',',AV180,',',K,',',AVRC,',',AVRR,',',CTRY
+      ENDIF
+      
+C- K270  ------------------------------------------------------------     
+      IF(K270 .GT. 0)THEN
+        WRITE(CAVR,'(F4.2)') AV270 
+        IF(AV270 .LT. 0)WRITE(CAVR,'(F5.2)')AV270   
+        IF(K270 .LT. 10)                         WRITE(CNAR,'(I1)')K270            
+        IF(K270 .GE. 10 .AND. K270 .LT. 100)     WRITE(CNAR,'(I2)')K270 
+        IF(K270 .GE. 100 .AND. K270 .LT. 1000)   WRITE(CNAR,'(I3)')K270
+        IF(K270 .GE. 1000 .AND. K270 .LT. 10000) WRITE(CNAR,'(I4)')K270 
+      SNAR  = TRIM(STN(I))//'('//TRIM(CNAR)//'),'
+      SNARV = TRIM(STN(I))//'('//TRIM(CNAR)//'|'//TRIM(CAVR)//'),'
+      WRITE(34,'(A6,1X,A12,1X,A18,F9.4,A1,F10.4,A1,F8.4,A1,
+     & I5,A1,F6.2,A1,I5,A1,2(F6.2,A1),1X,A40)')
+     & CSTN,SNAR,SNARV,SLAT(I),',',SLON(I),',',-SELV(I),',',
+     & K270,',',AV270,',',K,',',AVRC,',',AVRR,',',CTRY
+      ENDIF
+      
+C- K360  ------------------------------------------------------------     
+      IF(K360 .GT. 0)THEN
+        WRITE(CAVR,'(F4.2)') AV360 
+        IF(AV360 .LT. 0)WRITE(CAVR,'(F5.2)')AV360   
+        IF(K360 .LT. 10)                         WRITE(CNAR,'(I1)')K360            
+        IF(K360 .GE. 10 .AND. K360 .LT. 100)     WRITE(CNAR,'(I2)')K360 
+        IF(K360 .GE. 100 .AND. K360 .LT. 1000)   WRITE(CNAR,'(I3)')K360
+        IF(K360 .GE. 1000 .AND. K360 .LT. 10000) WRITE(CNAR,'(I4)')K360 
+      SNAR  = TRIM(STN(I))//'('//TRIM(CNAR)//'),'
+      SNARV = TRIM(STN(I))//'('//TRIM(CNAR)//'|'//TRIM(CAVR)//'),'
+      WRITE(35,'(A6,1X,A12,1X,A18,F9.4,A1,F10.4,A1,F8.4,A1,
+     & I5,A1,F6.2,A1,I5,A1,2(F6.2,A1),1X,A40)')
+     & CSTN,SNAR,SNARV,SLAT(I),',',SLON(I),',',-SELV(I),',',
+     & K360,',',AV360,',',K,',',AVRC,',',AVRR,',',CTRY
+      ENDIF
+C     
+      ENDIF
+      NSTA   =  LLST           ! NUMBER OF SELECTED STATIONS FROM GLOBAL LIST
+  300 CONTINUE
+      END SUBROUTINE AZI_RES
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+
+      SUBROUTINE INPUT_BISC   
+      INCLUDE "A_PARAM_MALAY.INC"     
+!     CODED BY: OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     
+!     PURPOSE: TO READ ARRIVALTIME DATASET FROM BULLETIN OF ISC  
+!
+!SUBROUTINES : STN_CORD, DAZXY, PHASE
+C----------------------------------------------------------------------
+C
+      CHARACTER*22   :: DTM      ! EVENT DATE & TIME
+      CHARACTER*9    :: QID      ! EVENT ID
+      CHARACTER*3    :: GMAG     ! EVENT MAGNITUDE
+      CHARACTER*8    :: ARV      ! P/S ARRIVAL ID
+      CHARACTER*11   :: CTM      ! P/S ARRIVAL TIME
+      CHARACTER*5    :: DPS      ! P/S PHASE ID LETTER
+      CHARACTER*5    :: STC      ! P/S STATION CODE
+C      LOGICAL        :: EXIST
+C-------------------------------------------------------------      
+C      INQUIRE(FILE="DATASET", EXIST=EXIST)
+C      IF (EXIST) THEN
+C      OPEN(42, FILE="DATASET", STATUS="OLD", 
+C     & POSITION="APPEND", ACTION="WRITE")  ! EVENTS AND STATION ARRIVAL TIMES
+C      ELSE
+C      OPEN(42, FILE="DATASET", STATUS="NEW", ACTION="WRITE")
+C      END IF
+C-------------------------------------------------------------      
+C      OPEN(41,FILE='EVENTS',FORM='FORMATTED',
+C     & STATUS='UNKNOWN',ACCESS='APPEND')
+C      OPEN(42,FILE='DATASET',FORM='FORMATTED',
+C     & STATUS='UNKNOWN',ACCESS='APPEND')
+C-------------------------------------------------------------      
+      OPEN(3,FILE="ISC_Sumatra_1964_2020")    ! ISC FILE     
+      OPEN(41,FILE="A_DATA_PRE")              ! EVENTS AND STATION ARRIVAL TIMES
+C----               
+      I     = 0                               ! EVENT COUNTER             
+      MAPS  = 0
+      MPA   = 0
+      MSA   = 0
+      
+   10 READ(3,'(A)')LNE  
+      IF(LNE(1:1) .EQ. ' ')GOTO 100         ! WHITE LINE SEEN, GOTO READ EVENT ID LINE
+      GOTO 10                               ! LINE IS NOT BLANK, RETURN
+  100 READ(3,'(A136)',END=900)LNE  
+      IF(LNE(1:3) .EQ. 'Sta')GOTO 105       ! STN   HEADER            
+      IF(LNE(1:5) .EQ. 'Event')THEN         ! EVENT HEADER 
+      QID   = LNE(7:15)   
+      READ(3,'(/A136/)',END=900)LNE         ! EVENT LINE (WHITE LINE BENEATH)
+      DTM    = LNE(1:22)                    ! DATE & TIME
+      READ(LNE(1:4),'(I4)')     IYR
+      READ(LNE(12:13),'(I2)')   IHR
+      READ(LNE(15:16),'(I2)')   IMI
+      READ(LNE(18:22),'(F5.2)') SEC0
+      READ(LNE(30:35),'(F6.3)') RMS
+      READ(LNE(37:44),'(F8.4)') FLA
+      READ(LNE(46:54),'(F9.4)') FLO
+      READ(LNE(71:76),'(F6.1)') DEP 
+      I      = I+1                          ! EVENT COUNTER
+      MEQS   = I                            ! TOTAL NUMBER OF EVENTS
+      JP     = 0                            ! P-  COUNTER
+      JS     = 0                            ! S-  COUNTER
+      JPS    = 0                            ! P/S COUNTER     
+      T0     = 3600.0*IHR + 60.0*IMI + SEC0      
+C READ MAGNITUDE IF AVAILABLE
+      READ(3,'(A38)',END=900)LNE            ! MAGNITUDE HEADER 
+      IF(LNE(1:3) .EQ. 'Mag')THEN           ! MAG IS AVAILABLE 
+      READ(3,'(A38)',END=900)LNE            ! MAGNITUDE LINE       
+      GMAG     =  LNE(1:3)                  ! READ 1ST MAG VALUE, 
+      READ(LNE(7:10),'(F4.1)')FMAG          ! & SKIP THE REST
+C                
+C WRITE EVENTS TO CONSOLE(6), EVENT ONLY (41) AND DATASET (42)
+C      WRITE(6,'(A22,F9.4,F10.4,F8.2,F4.1,1X,A3,1X,A9,I8)')
+C     & DTM,FLA,FLO,DEP,FMAG,GMAG,QID,I
+     
+      WRITE(41,'(/A41,A26/A22,F9.4,F10.4,F8.2,
+     & F4.1,1X,A3,1X,A8,I19/A41,A44)')
+     1 'YYYY/MM/DD HR:MI  SEC   LAT(DEG) LON(DEG)',
+     & 'Z(KM) MAG    EQID(BISC)',
+     2 DTM,FLA,FLO,DEP,FMAG,GMAG,QID,I,
+     3 'STN   HR:MI: SEC   ID     TOBS(s)  XC(KM)',
+     4 'XR(KM)   BAZC   BAZR  RESR    ArrID   JSTN'  
+      GOTO 100                                  ! RETURN AFTER READING MAG
+C
+      ELSEIF(LNE(1:3) .EQ. 'Sta') THEN          ! NO MAG IN DATA
+      GMAG   =  'xxx'
+      FMAG   =   0.0
+C WRITE EVENTS TO CONSOLE(6), EVENT ONLY (41) AND DATASET (42)
+C      WRITE(6,'(A22,F9.4,F10.4,F8.2,F4.1,1X,A3,1X,A9,I8)')
+C     & DTM,FLA,FLO,DEP,FMAG,GMAG,QID,I    
+C     
+      WRITE(41,'(/A41,A26/A22,F9.4,F10.4,F8.2,
+     & F4.1,1X,A3,1X,A9,I18/A41,A44)')
+     1 'YYYY/MM/DD HR:MI  SEC   LAT(DEG) LON(DEG)',
+     & 'Z(KM) MAG    EQID(BISC)',
+     2 DTM,FLA,FLO,DEP,FMAG,GMAG,QID,I,
+     3 'STN   HR:MI: SEC   ID     TOBS(s)  XC(KM)',
+     4 'XR(KM)   BAZC   BAZR  RESR    ArrID   JSTN'  
+      GOTO 105                                   ! GO TO READ STN IF MAG IS NOT AVAILABLE 
+      ENDIF                                      ! ENDIF MAG IS AVAILABLE
+C      
+      ENDIF                                      ! ENDIF EVENT HEADER 
+      GOTO 100
+C--------- EVENT HEADER AND MAGNITUDE HAVE BEEN READ
+C
+  105 READ(3,'(A136)',END=900)LNE                ! STN LINE
+      STC      = LNE(1:5)                        ! STN LETTER CODE
+      IF(STC  .EQ. ' ')GOTO 100                  ! STATION ENDS      
+      DPS      = LNE(20:24)                      ! P/S PHASE LETTER(S)
+      CTM      = LNE(29:39)                      ! P/S ARRIVAL TIME
+      ARV      = LNE(115:122)                    ! P/S ARRIVAL ID     
+      READ(LNE(8:12),'(F5.2)')  DEL1             ! DISTANCE(del)
+      READ(LNE(13:18),'(F6.1)') AZM              ! AZIMUTH (BISC)
+      READ(LNE(29:30),'(I2)')   JHR              ! P/S HOUR
+      READ(LNE(32:33),'(I2)')   JMI              ! P/S MINUTE
+      READ(LNE(35:40),'(F6.3)') SEC1             ! P/S SECONDS
+      READ(LNE(42:46),'(F5.1)') RES              ! P/S RESDIUAL (BISC)
+      LTIM     = LEN(TRIM(CTM))                  ! GET LENGTH OF ARRIVAL TIME
+      IF(LTIM .EQ. 8) CTM = TRIM(CTM)//'.00'     ! CONCARTENATE WITH .00    
+      IF(LTIM .EQ. 10)CTM = TRIM(CTM)//'0'       ! CONCARTENATE WITH 0 
+      BAZ0 = AZM + 180.0                         ! BACK-AZIMUTH (BISC)
+      IF(BAZ0 .GE. 360.0)BAZ0 = BAZ0 - 360.0     ! BACK-AZIMUTH > 360 (BISC)
+      DIST  = DEL1 * DKM                         ! COMVERT DISTANCE TO (KM)
+C
+      IF(JHR .EQ. 0 .AND. IHR .EQ. 23) JHR = 24  ! UNIFY HOUR FOR EVENT & ARRIVALS
+      T1    = 3600*JHR + 60.0*JMI + SEC1
+      TT0   = T1 - T0                            ! P/S TRAVEL-TIME FROM DATA
+      IF(CTM .EQ.  ' ' )      GOTO 105           ! AVOID BLANK ARRIVAL TIMES
+      IF(DPS .EQ.  ' ' )      GOTO 105           ! AVOID BLANK PHASE LETTER(S)
+      IF(ARV .EQ.  ' ' )      GOTO 105           ! AVOID BLANK NEGATIVE ARRIVAL TIMES
+      IF(RES .EQ. 0.0)        GOTO 105           ! AVOID NO RESIDUALS
+      IF(TT0 .LE. 0.0)        GOTO 105           ! AVOID ZERO TRAVELTIME
+      IF(ABS(RES) .GT. RESMAX)GOTO 105           ! AVOID LARGE RESIDUALS
+C      IF(TT0 .GT. 200.0)      GOTO 105          ! LIMIT OF TRAVELTIME (IN SEC)
+C      IF(DIST .GT. XMAX)      GOTO 105          ! DON'T EXCEED MAX EPID
+!      
+      CALL STN_CORD(QID,STC,ST1,ST2,ST3,MSTN) 
+      QLAT  = FLA
+      QLON  = FLO
+      Z0    = DEP
+      S1    = ST1
+      S2    = ST2
+      S3    = ST3
+      CALL DAZXY(1,QLAT,QLON,Z0,S1,S2,S3,DS,DXD,AZ,XX,YY) ! GET DISTANCE(DXD)& AZIMUTH(AZ)
+      BAZ2  = AZ/DEG + 180.0                     ! CONVERT TO BACK-AZIMUTH
+      IF(BAZ2 .GE. 360.0) BAZ2 = BAZ2-360.0      ! CONSTRAIN BACK-AZIMUTH (0-360)
+C------
+      IF(MSTN .LT. 1 .OR. MSTN .GT. NST) GOTO 105  ! SKIP STN POSITION OUTSIDE LIST      
+      IF(ST1 .LT. SLAMIN) GOTO 105               ! SKIP STN IF < MIN STN LAT 
+      IF(ST2 .LT. SLOMIN) GOTO 105               ! SKIP STN IF < MIN STN LON
+      IF(ST1 .GT. SLAMAX) GOTO 105               ! SKIP STN IF > MAX STN LAT
+      IF(ST2 .GT. SLOMAX) GOTO 105               ! SKIP STN IF > MAX STN LON  
+      IF(DXD .GT. XMAX)   GOTO 105               ! DON'T EXCEED MAX EPID
+C
+      MAPS  = MAPS + 1                           ! P/S COUNT
+      JPS   = JPS  + 1                           ! P/S COUNT PER EVENT (J)     
+      Z0    = DEP                                ! PARSE EVENT DEPTH (CALL ONLY)
+      CALL PHASE(1,Z0,KPS,DPS)                   ! (1)GET KPS ID LETTERS -> NUMBERS (P:1-6, S:11-16)
+C         
+C---- PARSE P- RELATED DATA TO GLOBAL
+      IF(DPS(1:1) .EQ. 'P' .OR. DPS(1:1) .EQ. 'p')THEN
+C     CALL WAVE_TYPE(DEP,DEL,1,KPS)               ! 1: GET -PHASE ID NUMBER (1-6)
+C     CALL PHASE(2,DEP,KPS,DPS)                  ! 2: PHASE ID NUMBERS -> LETTERS
+      JP    = JP  + 1                            ! P- COUNT IN EVENT
+      JP1   = JP  - 1                            ! P- COUNT REVIOUS
+      MPA   = MPA + 1                            ! P- TOTAL COUNT   
+C      
+      ELSEIF(DPS(1:1) .EQ. 'S' .OR. DPS(1:1) .EQ. 's')THEN
+      JS    = JS  + 1                            ! S- COUNT IN EVENT
+      JS1   = JS  - 1                            ! S- COUNT IN EVENT REVIOUS
+      MSA   = MSA + 1                            ! S- TOTAL COUNT
+      ENDIF
+C    WRITE ARRIVAL TIME TO  DATASET (72)
+      WRITE(42,'(A5,1X,A11,I3,A5,3F8.2,2F7.2,F6.2,1X,A8,I7)')
+     & STC,CTM,KPS,DPS,TT0,DXD,DIST,BAZ2,BAZ0,RES,ARV,MSTN
+      GOTO 105                      
+C
+  900 CLOSE(3)
+      CLOSE(41)
+      RETURN
+      END SUBROUTINE INPUT_BISC
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE INPUT_SFILE  
+      INCLUDE "A_PARAM_MALAY.INC"
+!     CODED BY: OSAGIE ABEL UYIMWEN (ABEL.OSAGIE@UNIABUJA.EDU.NG, MARCH 2019)
+!     PURPOSE: TO READ SFILE FROM SEISAN
+!     SUBROUTINES: STN_CORD, DAZXY, PHASE & WAVE_TYPE
+C----------------------------------------------------------------------
+C
+      CHARACTER*22   :: DTM      ! EVENT DATE & TIME
+      CHARACTER*11   :: CTM      ! P/S ARRIVAL TIME
+      CHARACTER*9    :: QID      ! EVENT ID
+      CHARACTER*8    :: ARV      ! P/S ARRIVAL ID
+      CHARACTER*3    :: GMAG     ! EVENT MAGNITUDE
+      CHARACTER*5    :: STC      ! P/S STATION LETTER CODE
+      CHARACTER*5    :: DPS      ! P/S PHASE ID LETTERS
+      CHARACTER*1    :: CPS      ! P/S IDENTIFIER LETTERS 
+      CHARACTER*2    :: PSHH     ! P/S HH
+      CHARACTER*2    :: PSMM     ! P/S MM
+      CHARACTER*2    :: PS1      ! P/S sec (BEFORE DECIMAL)
+      CHARACTER*2    :: PS2      ! P/S sec (AFTER DECIMAL)      
+C      LOGICAL        :: EXIST
+C-----------------------------------------------------------------------
+C      INQUIRE(FILE="DATASET", EXIST=EXIST)
+C      IF (EXIST) THEN
+C      OPEN(52, FILE="DATASET", STATUS="UNKNOWN", 
+C     & POSITION="APPEND", ACTION="WRITE")
+C      ELSE
+C      OPEN(52, FILE="DATASET", STATUS="NEW", ACTION="WRITE")
+C      END IF
+      
+C      INQUIRE(FILE="EVENTS", EXIST=EXIST)
+C      IF (EXIST) THEN
+C      OPEN(51, FILE="EVENTS", STATUS="OLD", 
+C     & POSITION="APPEND", ACTION="WRITE")
+C      ELSE
+C      OPEN(52, FILE="EVENTS", STATUS="NEW", ACTION="WRITE")
+C      END IF
+C-----------------------------------------------------------------------
+      OPEN(3,FILE="sfile_Pmalay_2006_2018")
+C
+      OPEN(41,FILE='A_DATA_PRE',FORM='FORMATTED',
+     & STATUS='UNKNOWN',ACCESS='APPEND')
+C----               
+      I     = 0     ! EVENT COUNTER             
+      MAPS  = 0
+      MPA   = 0
+      MSA   = 0
+  100 READ(3,'(A80)',END=900)LNE
+      IF(LNE(80:80) .NE. '1')  GOTO 100  ! RETURN IF NOT EVENT
+      READ(LNE(2:5),'(I4)')     IY4
+      READ(LNE(7:8),'(I2)')     IMO
+      READ(LNE(9:10),'(I2)')    IDD
+      READ(LNE(12:13),'(I2)')   IHR
+      READ(LNE(14:15),'(I2)')   IMI
+      READ(LNE(17:20),'(F4.1)') SEC0
+      READ(LNE(24:30),'(F7.3)') FLA
+      READ(LNE(31:38),'(F8.3)') FLO
+      READ(LNE(39:43),'(F5.1)') DEP
+      READ(LNE(52:55),'(F4.1)') RMS0
+      READ(LNE(56:59),'(F4.1)') FMAG
+      IF(DEP .LT. DEPMIN .OR. DEP .GE. DEPMAX) GOTO 100 ! SKIP DEPTH OUT OF RANGE
+C      IF(IY4 .LT. 2017) GOTO 100 ! SKIP DEPTH OUT OF RANGE
+C      
+      I     = I+1                                ! EVENT COUNTER
+      MEQS  = I                                  ! TOTAL NUMBER OF EVENTS
+      JP    = 0                                  ! P-  COUNTER
+      JS    = 0                                  ! S-  COUNTER
+      JPS   = 0                                  ! P/S COUNTER    
+C     II    = 90000000 + I                       ! EVENT ID (INTEGER)
+      DTM   = LNE(2:5)//'/'//LNE(7:8)//'/'//LNE(9:10)//
+     & ' '//LNE(12:13)//':'//LNE(14:15)//':'//LNE(17:20)
+      T0    = 3600.0*IHR + 60.0*IMI + SEC0  
+C WRITE EVENTS TO CONSOLE(6), EVENT ONLY (10) AND EVENT (11)
+      GMAG  = 'mb '
+      QID   ='999999998'
+C      WRITE(6,'(A22,F9.4,F10.4,F8.2,F4.1,1X,A3,1X,A8,I8)')
+C     & DTM,FLA,FLO,DEP,FMAG,GMAG,QID,I
+C     
+      WRITE(41,'(/A41,A26/A22,F9.4,F10.4,F8.2,
+     & F4.1,1X,A3,1X,A8,I19/A41,A44)')
+     1 'YYYY/MM/DD HR:MI  SEC   LAT(DEG) LON(DEG)',
+     & 'Z(KM) MAG    EQID(SFIL)',
+     2 DTM,FLA,FLO,DEP,FMAG,GMAG,QID,I,
+     3 'STN   HR:MI: SEC   ID     TOBS(s)  XC(KM)',
+     4 'XR(KM)   BAZC   BAZR  RESR    ArrID   JSTN'  
+C     
+      KPS      = 0   ! PHASE ID
+  101 READ(3,'(A80)',END=900)LNE                 ! STN RECORD HEADER
+      IF(LNE(80:80) .NE. '7') GOTO 101  
+  105 READ(3,'(A80)',END=900)LNE                 ! STN LINE
+      STC      = LNE(2:6)                        ! P/S STATION LETTER CODE
+      IF(STC .EQ. 'KOM')STC = 'MYKOM'            ! CHANGE "KOM" TO "MYKOM" TO BISC NAMING    
+      IF(STC .EQ. 'KUM')STC = 'KULM'             ! CHANGE "KUM" TO "KULM" TO BISC NAMING    
+      IF(STC .EQ. ' ')       GOTO 100            ! STN RECORD ENDS
+      CPS    = LNE(11:11)                        ! P/S IDENTIFIER LETTERS
+      PSHH   = LNE(19:20)                        ! P/S HH
+      PSMM   = LNE(21:22)                        ! P/S MM
+      PS1    = LNE(24:25)                        ! SEC (BEFORE DECIMAL)
+      PS2    = LNE(27:28)                        ! SEC (AFTER DECIMAL)
+      LPSH   = LEN(TRIM(PSHH))                   ! GET LENGTH OF P/S HH
+      LPSM   = LEN(TRIM(PSMM))                   ! GET LENGTH OF P/S MM
+      LPS1   = LEN(TRIM(PS1))                    ! GET LENGTH OF P/S sec BEFORE
+      LPS2   = LEN(TRIM(PS2))                    ! GET LENGTH OF P/S sec AFTER
+      IF(LPSH .EQ. 0) PSHH = '00'                ! CONCARTENATE TO 00 
+      IF(LPSM .EQ. 0) PSMM = '00'                ! CONCARTENATE TO 00 
+      IF(LPS1 .EQ. 0) PS1 = '00'                 ! CONCARTENATE TO 00 
+      IF(LPS2 .EQ. 0) PS2 = '00'                 ! CONCARTENATE TO 00 
+      IF(LPSH .EQ. 1) PSHH = '0'//TRIM(PSHH)     ! PUT '0' IN FRONT 
+      IF(LPSM .EQ. 1) PSMM = '0'//TRIM(PSMM)     ! PUT '0' IN FRONT 
+      IF(LPS1 .EQ. 1) PS1 = '0'//TRIM(PS1)       ! PUT '0' IN FRONT 
+      IF(LPS2 .EQ. 1) PS2 = '0'//TRIM(PS2)       ! PUT '0' IN FRONT 
+C
+      ARV   = '99999998'                         ! P/S ARRIVAL ID  
+      BAZ0  = 0.0
+      READ(LNE(19:20),'(I2)')   JHR 
+      READ(LNE(21:22),'(I2)')   JMI
+      READ(LNE(24:28),'(F5.2)') SEC1
+      READ(LNE(64:69),'(F6.3)') RES              ! P/S RESIDUAL(SFILE)
+      READ(LNE(71:75),'(F5.0)') DIST             ! DISTANCE (SFILE)
+      IF(JHR .EQ. 0 .AND. IHR .EQ. 23) JHR = 24  ! 
+      T1    = 3600*JHR + 60.0*JMI + SEC1
+      TT0   = T1 - T0                            ! P/S TRAVEL-TIME FROM DATA
+      IF(ABS(RES) .GT. RESMAX)GOTO 105           ! AVOID LARGE RESIDUALS
+
+      CALL STN_CORD(QID,STC,ST1,ST2,ST3,MSTN) 
+      QLAT  = FLA
+      QLON  = FLO
+      Z0    = DEP
+      S1    = ST1
+      S2    = ST2
+      S3    = ST3
+      CALL DAZXY(1,QLAT,QLON,Z0,S1,S2,S3,DS,DXD,AZ,XX,YY) ! GET DISTANCE(DXD)& AZIMUTH(AZ)
+      BAZ2   = AZ/DEG + 180.0                    ! CONVERT TO BACK-AZIMUTH
+      IF(BAZ2 .GE. 360.0) BAZ2 = BAZ2-360.0      ! CONSTRAIN BACK-AZIMUTH (0-360)
+      IF(MSTN .LT. 1 .OR. MSTN .GT. NST) GOTO 105  ! SKIP STN POSITION OUTSIDE LIST      
+      IF(ST1 .LT. SLAMIN) GOTO 105               ! SKIP STN IF < MIN STN LAT 
+      IF(ST2 .LT. SLOMIN) GOTO 105               ! SKIP STN IF < MIN STN LON
+      IF(ST1 .GT. SLAMAX) GOTO 105               ! SKIP STN IF > MAX STN LAT
+      IF(ST2 .GT. SLOMAX) GOTO 105               ! SKIP STN IF > MAX STN LON  
+      IF(DXD .GT. XMAX)   GOTO 105               ! DON'T EXCEED MAX EPID
+
+      MAPS  = MAPS + 1                           ! P/S COUNT
+      JPS   = JPS  + 1                           ! P/S COUNT PER EVENT (J)     
+C---- PARSE P- RELATED DATA TO GLOBAL
+      IF(CPS .EQ. 'P') THEN
+      Z0    = DEP                                ! PARSE EVENT DEPTH            (CALL ONLY)
+      CALL WAVE_TYPE(Z0,DXD,1,KPS)               ! (1)GET P-PHASE ID NUMBER (1-7)
+      MPA   = MPA + 1                            ! P- TOTAL COUNT   
+      JP    = JP + 1                             ! P- COUNT IN EVENT
+      JP1   = JP - 1                             ! P- COUNT REVIOUS
+C      CTM   = PSHH//':'//PSMM//':'//PS1//'.'//PS2 ! P- ARRIVAL TIME (HH MM:SS)
+      ELSEIF(CPS .EQ. 'S') THEN
+      Z0    = DEP                                ! PARSE EVENT DEPTH            (CALL ONLY)
+      CALL WAVE_TYPE(Z0,DXD,2,KPS)               ! (2) GET S-PHASE ID NUMBER (11-15)
+      MSA   = MSA + 1                            ! S- TOTAL COUNT
+      JS    = JS + 1                             ! S- COUNT IN EVENT
+      JS1   = JS - 1                             ! S- COUNT IN EVENT REVIOUS
+      ENDIF 
+C      
+      Z0    = DEP                                ! PARSE EVENT DEPTH            (CALL ONLY)
+      CALL PHASE(2,Z0,KPS,DPS)                   ! (2) LETTERS -> NUMBERS (P/S)
+      CTM   = PSHH//':'//PSMM//':'//PS1//'.'//PS2    ! P/S ARRIVAL-TIME (MM:SS)
+       WRITE(41,'(A5,1X,A11,I3,A5,3F8.2,2F7.2,F6.2,1X,A8,I7)')
+     & STC,CTM,KPS,DPS,TT0,DXD,DIST,BAZ2,BAZ0,RES,ARV,MSTN
+C
+      GOTO 105                      
+  900 CLOSE(3)     
+      CLOSE(41)
+      RETURN
+      END SUBROUTINE INPUT_SFILE
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE INPUT_PRE
+      INCLUDE "A_PARAM_MALAY.INC"
+!     CODED BY:  OSAGIE ABEL UYIMWEN 
+!                (ABEL.OSAGIE@UNIABUJA.EDU.NG, JULY 2021)
+!     INPUT   :  "A_DATA_PRE" (COMBINED DATA FROM DIFFERENT SOURCES)
+!     OUTPUT  :  "A_DATA1" (INPUT FILE FOR "FORWARD")
+
+      CHARACTER*6            :: DSOS            ! DATA SOURCE
+      CHARACTER*5            :: STNQ(100)       ! HOLD STAION CODE
+      CHARACTER*3            :: PHAQ(100)       ! HOLD PHASE
+      CHARACTER*8            :: ARV(100)        ! HOLD ARRIVAL ID
+      CHARACTER*25           :: LSL(100)        ! HOLD STAION LINE
+      REAL*4, DIMENSION(100) :: TTC,XD2,XD1,RS2,RS1,BZ2
+      INTEGER,DIMENSION(100) :: KST
+!----
+      OPEN(3,FILE="A_DATA_PRE")          ! EVENTS AND STATION ARRIVAL TIMES (CREATED BY INPUT_BISC/INPUT_SFILE/INPUT_JWEED
+      OPEN(42,FILE="A_DATA1")            ! EVENTS AND STATION ARRIVAL TIMES
+
+      I     = 0                          ! EVENT COUNTER 1
+      IEV   = 0                          ! USEFUL EVENT COUNTER 1
+      JEV   = 0                          ! USEFUL EVENT COUNTER 2
+      NADX  = 0                          ! TOTAL NUMBER OF DATA USED
+      NAPX  = 0                          ! TOTAL NUMBER OF P- ARRIVAL DATA
+      NASX  = 0                          ! TOTAL NUMBER OF S- ARRIVAL DATA
+      IDC   = 0                          ! DATA SOURCE IDENTIFIER
+  100 READ(3,'(A78)',END=900)LNE         ! EVENT LINE SEARCH
+      IF(LNE(1:4) .NE. 'YYYY')GOTO 100   ! RETURN IF NOT EVENT
+      IF(LNE(64:67) .EQ. 'BISC')IDC = 1  ! ISC DATA
+      IF(LNE(64:67) .EQ. 'SFIL')IDC = 2  ! SFILE (HANDPICK)
+      IF(LNE(64:67) .EQ. 'JWED')IDC = 3  ! JWEED (IRIS ESTIMATED DATA)
+      DSOS = LNE(63:68)                  ! GET DATA SOURCE LETTERS
+
+      READ(3,'(A78/)',END=900)LNE
+      CMAG   = LNE(55:57)                ! READ MAG SYMBOL (CHARACTER)
+      EVID   = LNE(59:67)                ! READ EVENT ID (CHARACTER)
+C     READ(LNE(1:4),'(I4)')     IY4      ! READ EVENT YEAR (INTEGER) 
+C     READ(LNE(6:7),'(I2)')     IMO      ! READ EVENT MONTH (INTEGER) 
+C     READ(LNE(9:10),'(I2)')    IDD      ! READ EVENT DAY (INTEGER) 
+C     READ(LNE(12:13),'(I2)')   IHR      ! READ EVENT HOUR (INTEGER) 
+C     READ(LNE(15:16),'(I2)')   IMI      ! READ EVENT MINUTE (INTEGER) 
+C     READ(LNE(18:22),'(F5.2)') SEC0     ! READ EVENT SECOND (REAL) 
+      READ(LNE(23:31),'(F9.4)') FLA      ! READ EVENT LATITUDE (REAL) 
+      READ(LNE(32:41),'(F10.4)')FLO      ! READ EVENT LONGITUDE(REAL)
+      READ(LNE(44:49),'(F6.2)') DEP      ! READ EVENT DEPTH (REAL)
+      READ(LNE(50:53),'(F4.1)') FMAG     ! READ EVENT MAGNITUDE (REAL)
+      IF(FMAG .LT. EMGMIN)                     GOTO 100 ! SKIP EVENTS WITH MAGNITUDE < MIN MAG
+      IF(FLA .LT. ELAMIN .OR. FLA .GT. ELAMAX) GOTO 100 ! SKIP EVENTS OUTSIDE LAT RANGE (IF PRESENT)
+      IF(FLO .LT. ELOMIN .OR. FLO .GT. ELOMAX) GOTO 100 ! SKIP EVENTS OUTSIDE LON RANGE (IF PRESENT)
+      IF(DEP .LT. DEPMIN .OR. DEP .GE. DEPMAX) GOTO 100 ! SKIP DEPTH OUT OF RANGE
+C     IF(FLA .GT. 1.0 .AND. FLO .GT. 101.0) GOTO 100 ! SKIP EVENT IN UNLIKELY LOCATION IN PENINSULAR MALAYSIA
+C
+      JPS   = 0                          ! P/S DATA COUNTER FOR EACH EVENT  
+      VPS   = 0.0                        ! VPVS RATIO READER (IF PRESENT)
+  105 READ(3,'(A85)',END=900)LNS         ! STN ARRIVAL LINE      
+      STA = LNS(1:5)                     ! EXTRACT STN CODE
+      IF(STA .EQ. ' ') GOTO 109          ! STATION ENDS, AGRREGATE ARRIVALS
+      PHAS  = LNS(21:23)                 ! EXTRACT PHASE LETTERS (P/S)
+      ARID  = LNS(71:78)                 ! ARRIVAL ID
+C    READ THE DIFFERENT FILE FORMATS (BISC, SFILE AND JWEED)
+C     IF(IDC .LT. 3)THEN                 ! DATA IS FROM BISC OR SFLE (HANDPICKED)
+C     READ(LNS(7:8),'(I2)')      JHR     ! P/S HOUR
+C     READ(LNS(10:11),'(I2)')    JMI     ! P/S MINUTES
+C     READ(LNS(13:17),'(F5.2)')  SEC1    ! P/S SECONDS
+      READ(LNS(19:20),'(I2)')    KPS     ! P/S PHASE NUMBER
+      READ(LNS(27:33),'(F7.2)') TOBS     ! P/S TRAVELTIME(S)
+      READ(LNS(34:41),'(F8.2)') DXD2     ! EPICENTRAL DIST(KM) CALCULATED
+      READ(LNS(42:49),'(F8.2)') DXD1     ! EPICENTRAL DIST(KM)
+      READ(LNS(51:56),'(F6.2)') BAZ2     ! BACK-AZIMUTH CALULATED 
+      READ(LNS(64:69),'(F6.2)') RES1     ! RESDIUAL
+      READ(LNS(79:85),'(I7)')   KSTN     ! STN POSITION
+      IF(DXD2 .GT. XMAX) GOTO 105        ! AVOID EPICENTRAL EPID OUTSIDE SELECTION
+      JPS   = JPS + 1                    ! COUNT P/S IN EVENT     
+C----SELECT EVENTS WITH 1 OR MORE ARRIVAL TIME      
+      IF (JPS .EQ. 1)THEN
+      I        = I+1                     ! EVENT COUNTER (BOTH NON-USEFUL)
+      EQID(I)  = EVID                    ! PARSE EVENT ID  (WHEN ARRIVAL IS 1)
+      ELAT(I)  = FLA                     ! PARSE EVENT LAT (WHEN ARRIVAL IS 1)
+      ELON(I)  = FLO                     ! PARSE EVENT LON        "
+      EDEP(I)  = DEP                     ! PARSE EVENT DEPTH      "
+C     ESEC(I)  = SEC0                    ! PARSE ARRIVAL TIME (SECONDS VALUE)
+      EMAG(I)  = FMAG                    ! PARSE EVENT MAGNITUDE  "
+      Z0       = DEP                     ! PARSE EVENT DEPTH FOR CALLING PURPOSE ONLY
+      CALL SLAY(Z0,LS)                   ! GET SOURCE LAYER NUMBER
+      LAYS(I)  = LS                      ! PARSE SOURCE LAYER NUMBER                 
+C     TIME  = 3600*IHR + 60.0*IMI + SEC0 ! CONVERT ORIGIN TIME TO SECOUNDS (HOUR+ MINUTE+ SEC)             
+      ENDIF
+C--          
+C     ARV1  = 3600*JHR + 60.0*JMI + SEC1 ! CONVERT ARRIVAL TIME TO SECOUNDS (HOUR+ MINUTE+ SEC) 
+C     TOBS   = ARV1 - TIME               ! OBTAIN TRAVELTIME(P/S)
+C
+!  AVOID STATIONS WITH THE SAME PHASE MORE THAN ONCE
+      IF(JPS .GT. 1)THEN
+      DO 210 J = 1,JPS
+      IF(STNQ(J) .EQ. STA .AND. PHAQ(J) .EQ. PHAS)THEN
+      JPS  = JPS - 1                     ! REDUCE COUNT BY 1
+      GOTO 105               
+      ENDIF
+  210 CONTINUE 
+      ENDIF
+C
+C-- PRESERVE STN CODE AND ARRIVAL PHASE FOR DUPICATION CHECK 
+      IF(JPS .GT. 0) THEN
+      STNQ(JPS) = STA                    ! PARSE STN CODE
+      PHAQ(JPS) = PHAS                   ! PARSE ARRIVAL PHASE
+      ENDIF
+C
+C-- START (XQ)  (ALTHOUGH, ALREADY DONE BY INPUT_BISC,SFILE,ETC) 
+C-- REMOVE STN OUTSIDE SELECTED AREA AND BEYOND MAX EPID   
+      CALL STN_CORD(EVID,STA,ST1,ST2,ST3,MSTN) 
+      IF(MSTN .LT. 1 .OR. MSTN .GT. NST)THEN
+      JPS  = JPS - 1                     ! REDUCE COUNT BY 1
+      GOTO 105                           ! SKIP STN POSITION OUTSIDE LIST
+      ENDIF
+      IF(ST1 .LT. SLAMIN .OR. ST1 .GT. SLAMAX)THEN
+      JPS  = JPS - 1                     ! REDUCE COUNT BY 1
+      GOTO 105                           ! SKIP STN POSITION OUTSIDE LIST
+      ENDIF
+      IF(ST2 .LT. SLOMIN .OR. ST2 .GT. SLOMAX)THEN
+      JPS  = JPS - 1                     ! REDUCE COUNT BY 1
+      GOTO 105                           ! SKIP STN POSITION OUTSIDE LIST
+      ENDIF
+C      IF(DXD2 .GT. XMAX)THEN
+C      JPS  = JPS - 1                     ! REDUCE COUNT BY 1
+C      GOTO 105                           ! SKIP STN POSITION OUTSIDE LIST
+C      ENDIF
+
+C-- STN IS WITHIN SELECTED AREA. NOW CALCULATE DISTANCE(DXD) & AZIMUTH(AZ) 
+C      QLAT  = FLA
+C      QLON  = FLO
+C      Z0    = DEP
+C      S1    = ST1
+C      S2    = ST2
+C      S3    = ST3
+C      CALL DAZXY(1,QLAT,QLON,Z0,S1,S2,S3,DS,DXD,AZ,XX,YY) ! GET DISTANCE(DXD)& AZIMUTH(AZ)
+C      IF(DXD .GT. XMAX)THEN              ! AVOID EPICENTRAL EPID OUTSIDE SELECTION
+C      JPS   = JPS - 1                    ! REDUCE COUNT BY 1
+C      GOTO 105               
+C      ENDIF
+C      BAZ  = AZ/DEG + 180.0              ! CONVERT TO BACK-AZIMUTH
+C      IF(BAZ .GE. 360.0)BAZ = BAZ-360.0  ! CONSTRAIN BACK-AZIMUTH (0-360)
+C---END (XQ) 
+C    
+      NE    = I                          ! PARSE EVENT COUNTER
+      JDAT  = JPS                        ! PARSE ARRIVAL COUNT (P/S)
+      JSTN  = MSTN                       ! PARSE STN POSITION
+      DXDC  = DXD2                       ! PARSE EPICENTRAL DISTANCE   (CALCULATED)
+      BZMC  = BAZ2                       ! PARSE BACK-AZIMUTH          (CALCULATED)
+      IDPS  = KPS                        ! PARSE P/S ARRIVAL PHASE NUMBER(REPORTED)
+      TIMR  = TOBS                       ! PARSE TRAVELTIME              (REPORTED)
+      DXDR  = DXD1                       ! PARSE EPICENTRAL DISTANCE     (REPORTED)
+C     BZMR  = BAZ2                       ! PARSE BACK-AZIMUTH            (REPORTED)
+C     RSR   = RES1                       ! PARSE RESIDUAL                (REPORTED)
+C-----
+      CALL TRAVT                         ! GET TRAVELTIME AND RAYPATH 
+      TIMC  = RAY(6,NPT)                 ! EXTRACT P/S  TRAVELTIME 
+      RES2  = TOBS  - TIMC               ! OBTAIN RESIDUAL (CALCULATED)
+      IF(ABS(RES2) .GT. RESMAX)THEN      ! AVOID RESIDUAL > RESMIN 
+      JPS   = JPS - 1                    ! REDUCE COUNT BY 1
+      GOTO 105               
+      ENDIF
+!      
+! USE ONLY SELECTED PHASE (MPS=1) FOR P AND (MPS=2) FOR S
+      IF(MPS .EQ. 1 .AND. KPS .GT. 10)THEN
+      NASX  = NASX + 1                   ! COUNT S- ARRIVALS
+      JPS   = JPS - 1                    ! REDUCE COUNT BY 1
+      GOTO 105                           ! SKIP S- (P- ONLY FOR INVERSION)
+      ELSEIF(MPS .EQ. 2 .AND. KPS .LT. 10)THEN
+      NAPX  = NAPX + 1                   ! COUNT P- ARRIVALS
+      JPS   = JPS - 1                    ! REDUCE COUNT BY 1
+      GOTO 105                           ! SKIP P- (S- ONLY FOR INVERSION)
+      ENDIF      
+!                
+      NADX  = NADX + 1                   ! COUNT NUMBER OF DATA ACTUALLY USED
+      IF(MPS .EQ. 1 .AND. KPS .LT. 10)NAPX = NADX  
+      IF(MPS .EQ. 2 .AND. KPS .GT. 10)NASX = NADX 
+C      
+! COUNT EVENTS THAT ARE ACTUALLY CONSIDERED
+      IF(JPS .EQ. 1)IEV = IEV +1   
+        
+! PARSE ARRIVAL DETAILS FOR USE AT 109  
+       LSL(JPS) = LNS(1:25)
+       TTC(JPS) = TIMC
+       XD2(JPS) = DXDC
+       XD1(JPS) = DXDR
+       RS2(JPS) = RES2 
+       RS1(JPS) = RES1
+       BZ2(JPS) = BZMC
+       ARV(JPS) = ARID
+       KST(JPS) = KSTN      
+      GOTO 105                           ! RETURN TO STN WITH ARRIVAL TIME
+
+
+  109 IF(JPS .GT. 0)THEN                 ! NO. OF ARV IS KNOWN
+      JEV  = JEV + 1                     ! COUNTER FOR NO. OF EVENTS USED      
+C     WRITE(6,'(A53,1X,A3,1X,A8,2I4,I7)')LNE,CMAG,EVID,LAYS(I),JPS,JEV        
+      WRITE(42,'(/A42,A33,1X,A6,I8/A53,1X,A3,1X,A9,2I4/A49,A36)')
+     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(deg)  LON(deg)',
+     & 'Z(km) MAG      EVENT-ID LYR NAR',DSOS,JEV,
+     & LNE,CMAG,EVID,LAYS(I),JPS,
+     & 'STN   HR:MI: SEC   ID       TC(s)  XC(km)  XR(km)', 
+     & 'RESC  RESR   BAZC     ArvID   JSTN'    
+      DO 110 JO  = 1,JPS
+      WRITE(42,'(A25,3F8.2,2F6.2,F7.2,2X,A8,I7,I4)')
+     & LSL(JO),TTC(JO),XD2(JO),XD1(JO),RS2(JO),RS1(JO),
+     & BZ2(JO),ARV(JO),KST(JO),JO
+  110 CONTINUE
+      ENDIF
+      GOTO 100                           ! GO TO NEXT EVENT
+
+  900 CONTINUE  
+      MEQS  = IEV                        ! PARSE NO. OF USEFUL EVENTS
+C     WRITE THE LAST EVENT AND ARRIVALS
+C      WRITE(6,'(A53,1X,A3,1X,A8,2I4,I7)')LNE,CMAG,EVID,LAYS(I),NAR,IEV        
+      WRITE(42,'(/A42,A33,1X,A6,I8/A53,1X,A3,1X,A9,2I4/A49,A36)')
+     & 'YYYY/MM/DD HR:MI:SS.SS  LAT(deg)  LON(deg)',
+     & 'Z(km) MAG      EVENT-ID LYR NAR',DSOS,IEV,
+     & LNE,CMAG,EVID,LAYS(I),JPS,
+     & 'STN   HR:MI: SEC   ID       TC(s)  XC(km)  XR(km)', 
+     & 'RESC  RESR   BAZC     ArvID   JSTN'    
+      DO 120 JO  = 1,JPS
+      WRITE(42,'(A25,3F8.2,2F6.2,F7.2,2X,A8,I7,I4)')
+     & LSL(JO),TTC(JO),XD2(JO),XD1(JO),RS2(JO),RS1(JO),
+     & BZ2(JO),ARV(JO),KST(JO),JO
+  120 CONTINUE
+      CLOSE(3)  
+      CLOSE(42)
+      RETURN
+      END SUBROUTINE INPUT_PRE
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE SLAY(DEP,LS)
+!     TO GET SOURCE LAYER NUMBER
+!     INPUT  : DEP (DEPTH)
+!     OUTPUT : LS (LAYER NO)      
+      INCLUDE "A_PARAM_MALAY.INC"
+      LS = 1
+      DO 10 K = 1,NL-1
+      IF(DEP .GT. BV(K)) LS = K     
+10    CONTINUE
+      RETURN
+      END SUBROUTINE SLAY
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE STN_CORD(QID,STC,SLA,SLO,SEV,MSTN)      
+!     TO GET CORDINATES OF STATION WITH ARRIVAL TIME
+!     INPUT : STC, QID
+!     OUTPUT: SLA,SLO,SEV,MSTN
+      INCLUDE "A_PARAM_MALAY.INC"     
+      CHARACTER*5    :: STC      ! P/S STATION CODE
+      CHARACTER*9    :: QID      ! EVENT ID
+!      
+      MSTN = 999999              ! SET MAXIMUM STATION NUMBER
+      DO 106 K = 1,NST     
+      IF(STC .EQ. STN(K))THEN    ! ARRIVAL TIME IS ON STATION LIST
+      MSTN  = K                  ! GET STN POSITION FROM LIST   
+      SLA   = SLAT(K)            ! PARSE STN LAT FROM LIST
+      SLO   = SLON(K)            ! PARSE STN LON FROM LIST
+      SEV   = SELV(K)            ! PARSE STN ELEVATION FROM LIST
+      ENDIF     
+C-----
+      IF(K .EQ. NST .AND. MSTN .EQ. 999999) THEN  ! STN IS NOT ON STN LIST
+      WRITE(6,'(A6,1X,A5,1X,A12,1X,A10,1X,A18)')
+     & 'STAION',STC,'OF EVENT ID',QID,'IS NOT ON THE LIST'  
+      ENDIF   
+  106 CONTINUE
+      RETURN
+      END SUBROUTINE STN_CORD
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE WTHYP(NOBS,GF,RMSWT,NARX)
+      INCLUDE "A_PARAM_MALAY.INC"
+C      COMMON/HYPINV/RESID(400),DTVAL(400,4),WTT(400)
+      DIMENSION     AQ(5),GF(5,11)
+      EVID = EQID(NE)
+C      EPS     = 1.0E-5
+      DO  100 K = 1,5
+      DO  200 J = 1,9
+200   GF(K,J) = 0.0
+      M       = K+5
+100   GF(K,M) = 1.0
+      NARX    = 0
+      WTM     = 0.0
+      RMSWT   = 0.0
+      DO  300 I = 1,NOBS
+      WTQ     = WTT(I)
+      WTQ2    = WTT(I)**2.0
+      WTM     = WTM + WTQ2
+      RMSW    = RESID(I)*WTQ
+      RMSWT   = RMSWT + RMSW**2.0
+      IF(WTQ .GT. EPS) NARX = NARX+1
+C      WRITE(50,'(3F7.2,2F6.2,1X,A8)')RESID(I),WTQ,RMSWT,WTQ2,WTM,EVID      
+      DO 310 J = 1,4
+310   AQ(J)   = DTVAL(I,J)*WTT(I)
+      AQ(5)   = RESID(I)*WTT(I)
+      DO  320 K = 1,5
+      DO  320 J = 1,5
+320   GF(K,J) = GF(K,J) + AQ(K)*AQ(J)
+300   CONTINUE
+      IF(WTM .GT. EPS) RMSWT = SQRT(RMSWT/WTM)
+      RETURN
+      END SUBROUTINE WTHYP
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+C
+      SUBROUTINE LINER(M,N,GF,ANS)
+      DIMENSION  GF(5,11),C(5,11),ANS(5,6)
+      EPS     = 1.0E-5
+      DO 100  K  = 1,5
+      DO 100  L  = 1,11
+100   C(K,L)   = GF(K,L)
+      DO 200  K  = 1,M
+      WK  = C(K,K)
+      IF(ABS(WK) .LT. EPS)WK = 1.0
+      KK       = K+1
+      DO 210  J  = KK,N
+210   C(K,J)   = C(K,J)/WK
+      DO 220  I  = 1,M
+      IF(I .EQ. K)GOTO 220
+      WK        = C(I,K)
+      DO 221  J  = KK,N
+221   C(I,J)   = C(I,J)-WK*C(K,J)
+220   CONTINUE
+200   CONTINUE
+      J  = N - M
+      DO 300  I  = 1,J
+      JJ       = M+I
+      DO 300  K  = 1,M
+300   ANS(K,I) = C(K,JJ)
+      RETURN
+      END SUBROUTINE LINER
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
+
+      SUBROUTINE RAND_ERR(SDV,AZM,S)
+!     RETURNS THE RANDOM ERROR(S) GIVEN THE STANDARD
+!     DEVIATION (SDV) AND AZIMUTH (AZM,RADIANS)
+      PID  = 0.017453
+      AZM  = AZM/PID
+      S1   = (AZM-REAL(INT(AZM)))*9000.0+5670.0
+      SS1  = SIN(S1*PID)
+      S2   = SS1*15600.0
+      S3   = ABS(S2-REAL(INT(S2)))
+      S4   = -2.0*ALOG(S3+0.000001)
+      IF(S4 .LE. 0.0)  S4 = 0.000001
+      S    = SQRT(S4)*SDV*SS1
+      RETURN
+      END SUBROUTINE RAND_ERR
+C-----------------------------------------------------------------------
+C-----------------------------------------------------------------------
