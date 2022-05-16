@@ -1,33 +1,42 @@
 Algorithm and data for seismic traveltime inversion tomography beneath the Malay Peninsula
 
-1. Unzip the folder "Algorithm_and_files" 
+1. Unzip the "Algorithm_&_files" folder
 
-Inside the folder are the files:
-a) A_DATA_PRE (arrival time dataset)
-b) A_PARAM_MALAY.INC
-c) GMT_Figures.bat (GMT code to generate figures of the inversion results) 
-d) GMT_Figures_CKB.bat (GMT code to generate figures from the checkerboard test)
-e) STN_GLOBAL (Station list)
-f) VEL_MODELS (different 1D Velocity Models)
-g) VELMODE.exe (the executable file)
-h) VELMODE.for (the Fortran code)
-i) VELMODE.o
+Inside the folder are:
+a) "output_files_15m" folder (contains output files of the 0.25º grid spacing)
 
-2. Run the VELMODE.exe file. 
-   Enter "1" to use default settings
+b) "output_files_30m" folder (contains output files of the 0.5º grid spacing)
+
+c) "gmt_codes" folder (contains gmt codes to produce the figures)
+
+d) some other files (i)-(vi):
+i)   DATA_PRE (arrival time dataset)
+ii)  A_PARAM_MALAY.INC (contains all parameter settings)
+iii) STN_GLOBAL (Station list)
+iv)  VEL_MODELS (different 1D Velocity Models)
+v)   VELMODE.exe (the executable file)
+vi)  VELMODE.for (the Fortran code)
+
+2. Run the VELMODE.exe file by double clicking
+   Enter "1" to use the default settings
+   After a few seconds, the output files will be generated
    
-3. Doubleclick the file "GMT_Figures.bat" to run the output files
-A14_SLICE_DEP.TXT, A15_SLICE_LAT.TXT and A16_SLICE_LON.TXT
-
-4. To run a checkerboard resolution test
+3. To run a checkerboard resolution test
 a) Enter "2"
 b) Enter "2" to select the ak135 velocity model
 c) Enter "1" to use p wave for inversion
 d) Enter "1" to perform perturbation
 e) Enter 2 for a 2% perturbation
-f) Enter 1 for a simple alternating grid separation
+f) Enter 1 for a simple alternating grid separation  
+After a few seconds, the checkerboard output files will be generated
 
-5. Doubleclick the file "GMT_Figures_CKB.bat" to run the output files
-A14_CKB_DEP.TXT, A15_CKB_LAT.TXT and A16_CKB_LON.TXT
+(Note that the 0.25º grid spacing is the default. You can change to the 0.5º grid spacing in the A_PARAM_MALAY.INC file)
+   
+4. Open the "gmt_codes" folder to find several ".bat" files (gmt codes to generate figures from several output files)
+(a) copy all the .bat files into the "Algorithm_&_files" folder
+(b) files with *_15m.bat files are for the  0.25º grid spacing output
+(c) files with *_30m.bat files are for the  0.5º grid spacing output
+(d) run the various *_15m.bat files to create the figures for the  0.25º grid spacing output
+(e) run the various *_30m.bat files to create the figures for the  0.5º grid spacing output
 
-Comments have been provided within the algorithm
+Comments are provided within the algorithm
